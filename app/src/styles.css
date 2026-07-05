@@ -1,0 +1,81 @@
+/* ClaudeStatus — floating light bar. Transparent window; the pill is drawn here. */
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}
+
+#bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  display: inline-flex;
+  align-items: center;
+  padding: 9px 13px;
+  background: rgba(20, 22, 26, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 999px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.38);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  cursor: grab;
+}
+#bar:active {
+  cursor: grabbing;
+}
+
+#lights {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.dot {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: #7f8c8d;
+  transition: background-color 0.2s ease, opacity 0.2s ease, box-shadow 0.2s ease;
+}
+
+.dot.running {
+  background: #2ecc71;
+  box-shadow: 0 0 8px rgba(46, 204, 113, 0.7);
+}
+.dot.blocked {
+  background: #f39c12;
+  box-shadow: 0 0 9px rgba(243, 156, 18, 0.85);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+.dot.idle {
+  background: #7f8c8d;
+}
+.dot.error {
+  background: #e74c3c;
+  box-shadow: 0 0 9px rgba(231, 76, 60, 0.85);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+.dot.empty {
+  background: rgba(255, 255, 255, 0.18);
+}
+.dot.stale {
+  opacity: 0.32;
+  box-shadow: none;
+  animation: none;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.38;
+  }
+}

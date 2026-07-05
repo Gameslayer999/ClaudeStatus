@@ -1,0 +1,14 @@
+# Local runtime state — never source (Agent Guideline #12)
+logs/*.log
+sessions.json
+
+# Backups of the user's Claude Code config created by the installer
+*.claudestatus-bak
+
+# Build artifacts (Tauri / node, for later milestones)
+app/node_modules/
+app/src-tauri/target/
+app/dist/
+
+# OS
+.DS_Store
