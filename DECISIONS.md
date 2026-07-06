@@ -22,6 +22,13 @@
 | 009 | 2026-07-05 | Hover tooltip (task + activity) and subagent tracking (count badge) — subagents tracked by SubagentStart/Stop lifecycle only (their tool calls aren't attributable) | Accepted |
 | 010 | 2026-07-05 | Subagent storage: one marker file per subagent (`sessions/<id>.subagents/<agent_id>`), not a field in the session JSON — parallel subagents were racing the shared file | Accepted |
 | 011 | 2026-07-05 | Packaging: self-installing app — bundles the hook (`include_str!`), writes it to `~/.claude/status/report.sh` and registers it on launch (release builds only); ships `.app` + `.dmg` + `install.sh` | Accepted |
+| 012 | 2026-07-05 | VS Code extension: per-window status-bar items (scoped to the window's workspace); click-to-focus via Claude Code's own `claude-vscode.editor.open` command (no URI-consent prompt) | Accepted |
+| 013 | 2026-07-06 | Red = `StopFailure` only (not `PostToolUseFailure`, which is recovered-tool-failure noise); `CLAUDESTATUS_IGNORE` env var opts a session out of tracking (for programmatic/headless Claude calls) | Accepted |
+| 014 | 2026-07-06 | Split idle into **done** (finished turn, unreviewed — steady white light) vs **idle** (acknowledged — dim gray); `reviewed` flag is app-local, cleared by clicking the light (which also focuses the session), reset by the next finished turn | Accepted |
+| 015 | 2026-07-06 | Settings panel: right-click the bar toggles an inline panel (not a gear icon / separate window); first setting = orientation (horizontal/vertical) via a `.vertical` CSS class + existing auto-resize; persisted in webview `localStorage`, frontend-only | Accepted |
+| 016 | 2026-07-06 | Bar click-to-focus via the IDE's own CLI (`code`/`cursor <root>`), not `open -a <folder>` — `open -a` spawns a new window when the target is a full-screen window on another Space; workspace root resolved from `~/.claude/ide/*.lock` so subfolder `cwd`s map to the right window. AppleScript window-raise rejected (can't see full-screen windows on inactive Spaces) | Accepted |
+| 017 | 2026-07-06 | Settings: light **size** (slider) + **per-state colors** (native `<input type=color>`), driven by CSS variables on `#bar` from `localStorage`; glow derived via `color-mix`. Plus `keepOnScreen()` — after each resize, shift the window inward if it overflows a monitor edge, so the panel opens "toward the middle." Frontend-only | Accepted |
+| 018 | 2026-07-06 | Click a bar light → focus the exact **session tab** (not just its window) via a bar→extension relay: the bar writes `~/.claude/status/focus-request.json` `{session_id, requested_at}`; the per-window extension polls it and calls the popup-free in-editor `claude-vscode.editor.open`. Chosen over the `vscode://…open?session=` deep link, which shows a consent popup on every click (verified live). Complements decision 016's window-raise | Accepted |
 
 ---
 
@@ -400,3 +407,287 @@ is out of scope for v1.
 rewrote the hook path from the repo to `~/.claude/status/report.sh`, registered all 11 events
 with exactly one entry each (dedup worked), wrote the executable script, backed up settings,
 and preserved `permissions`/`theme`.
+
+## 012 — VS Code extension: per-window status bar + native focus command
+
+**Date:** 2026-07-05
+**Status:** Accepted (delivers decisions 005, 006)
+
+**Context:** Milestone 6 — the extension does what the external app can't: show only
+**this window's** sessions (it knows its own workspace) and focus a specific session's tab.
+
+**Decision & mechanism (`extension/`):**
+- **Display:** status-bar items (chosen over a sidebar tree / installer-only). One item per
+  session whose `cwd` is within `vscode.workspace.workspaceFolders` — the auto "this window"
+  scoping of decision 006. Reads the same `~/.claude/status/sessions/` files (+ subagent
+  marker dirs), polled every 1.5s. Item = a `$(circle-filled)` colored by state
+  (`charts.green/yellow/red`, default for idle) with `×N` for subagents; tooltip (Markdown)
+  shows name/state/task/subagents/activity.
+- **Click-to-focus:** call **`claude-vscode.editor.open <sessionId>`** directly — this is the
+  command Claude Code's own `vscode://…/open?session=` handler calls internally (found by
+  reading the extension's registration). Calling it directly focuses the session's tab with
+  **no URI-consent prompt** (the prompt was why routing through the deep link was rejected).
+  Falls back to the deep link if the command is unavailable.
+- **Hook install:** the extension bundles `report.sh` and ensures the hooks — but **only if
+  not already present** (guarded), so multiple windows activating at once don't race on
+  `settings.json`. In practice the app already installed them, so it no-ops.
+- Packaged as a `.vsix` (`@vscode/vsce`); installed via the `code` CLI. **Marketplace publish
+  is deferred** — it needs a verified publisher account (a distribution step, not a build).
+
+**Validation:** installed the `.vsix`, reloaded a non-primary window, confirmed the status-bar
+item appears for that window's session with correct color/hover, and that clicking focuses the
+session's tab with no consent prompt. (Testing requires reloading a window, which restarts the
+extension host — never the window running the active session.)
+
+## 013 — Red = StopFailure only; CLAUDESTATUS_IGNORE opt-out
+
+**Date:** 2026-07-06
+**Status:** Accepted (refines #006 error signal; adds an opt-out)
+
+**Context:** Two issues raised in use. (a) The interim red trigger (`PostToolUseFailure`) was
+suspected noise. (b) Another window's Claude activity was appearing as a swarm of fleeting
+new lights.
+
+**Findings (captured live):**
+- **Error signal:** deliberately failing a Bash command (exit 7) and a subagent's command
+  (exit 42) produced **only `PostToolUseFailure` (`is_interrupt:false`)** — `StopFailure`
+  fired **0 times**. So `StopFailure` is reserved for genuine turn/API failures (rate-limit,
+  overload, etc.), which can't be forced. Treating every `PostToolUseFailure` as red would
+  flash the light on every recovered tool failure — misleading.
+- **The "new sessions":** the offending sessions were **ApplicationBot calling Claude Code
+  programmatically** (its question-classification feature — first prompt: *"Map a
+  job-application question to ONE of these known answer types…"*). Each is a real top-level
+  `claude-vscode` session (`isSidechain:false`, `parentUuid:null`, top-level transcript) —
+  **indistinguishable** from an interactive tab by any hook field or env var
+  (`CLAUDE_CODE_ENTRYPOINT` and `CLAUDE_CODE_CHILD_SESSION` are identical for both). The only
+  reliable discriminator is an explicit marker the spawner sets.
+
+**Decision:**
+- **Red = `StopFailure` only.** `PostToolUseFailure` no longer flips state; it's still written
+  to `~/.claude/status/calibration.log` for observation. `StopFailure` sets `error` and a
+  `detail` of "⚠ turn failed — <error_type>", which persists until the next prompt.
+- **`CLAUDESTATUS_IGNORE` opt-out.** If that env var is set in a session's environment,
+  `report.sh` exits immediately and never tracks it. Programmatic/headless spawners (e.g.
+  ApplicationBot) set `CLAUDESTATUS_IGNORE=1` when invoking `claude`. Chosen over a grace
+  period (auto but fuzzy: delays real sessions, still shows long programmatic ones) because
+  the spawner controls its own env and this is 100% reliable with zero false positives.
+
+**Propagation:** the hook lives in four places — repo `hooks/report.sh`, the live
+`~/.claude/status/report.sh`, the app's embedded copy (`include_str!`), and the extension's
+bundled copy. All four were updated (live `cp`, app rebuilt + reinstalled + relaunched,
+extension repackaged) so a future app launch or fresh install can't revert the change.
+
+**Validation:** unit-tested — `PostToolUseFailure` keeps state `running` (calibration-logged),
+`StopFailure` → `error`, `CLAUDESTATUS_IGNORE=1` writes no file. Red rendering confirmed via an
+injected `state:error` session (the user saw the red light).
+
+**Known minor follow-up:** the light's label is the session's `cwd` basename, so `cd`-ing into
+a subfolder relabels it (e.g. "app" instead of "ClaudeStatus"). Could map `cwd`→workspace root
+via the IDE lock files; deferred.
+
+## 014 — Split idle into "done" (unreviewed) vs "idle" (reviewed)
+
+**Date:** 2026-07-06
+**Status:** Accepted (refines the #006 idle state; UI-only, no hook/schema change)
+
+**Context:** A single gray idle light couldn't distinguish a session that **just finished a
+turn and whose output nobody has looked at yet** (needs a glance) from one whose output was
+**already reviewed** (dormant). The user wanted the former to draw attention and the latter to
+recede — the whole point of the bar is surfacing what needs the user.
+
+**Key constraint:** Claude Code hooks fire on *lifecycle* events. There is **no hook for "the
+user read the output"** — reading is a passive VS Code UI action that never touches the
+session lifecycle. So "reviewed" cannot come from the signal layer; it must be inferred in the
+display layer from an explicit acknowledgment the app itself can observe.
+
+**Options considered:**
+| Question | Options | Choice |
+|---|---|---|
+| What counts as "reviewed"? | (a) user clicks the light — which already focuses the session; (b) auto-dim after a timeout; (c) next `UserPromptSubmit` | **(a) click only.** A timeout was rejected: the user explicitly does not want the attention signal to disappear on its own. (c) is redundant — a new prompt flips the light to green anyway. |
+| Where does the `reviewed` flag live? | (a) app-local (display layer); (b) hook-written status file | **(a) app-local.** Keeps the hook a dumb, fast, fail-silent write (Guideline #3); "reviewed" is a per-display UI concern, not session state. |
+| How to tell a *finished turn* from a *fresh idle*? | (a) `idle` + non-empty `detail`; (b) new hook field | **(a).** `Stop` writes `detail` = the wrap-up message; `SessionStart` forces `detail=""`. So `idle && detail` reliably means "a turn ended, there's output to review" — no hook change needed. |
+
+**Decision & mechanism (bar frontend, `app/src/`):**
+- New render state **`done`** = `state == "idle" && detail != "" &&` not acknowledged →
+  a **steady bright-white** light with a soft glow. It stands out as "look here" but does
+  **not** pulse — pulsing stays reserved for the act-now states (blocked/error) so a done
+  light never competes with a session that needs input (UI Principle #2).
+- Acknowledged idle stays gray, now **dimmed (opacity 0.55)** so it recedes.
+- The app keeps `reviewedAt: sessionId → updated_at`. Clicking a light records the current
+  finish time and (as before) focuses the session; the light drops to dim gray. The ack is
+  keyed by `updated_at`, so the **next** finished turn (new `updated_at`) re-lights on its own.
+  The map is cleared when a session's light is removed.
+
+**Reasoning:** Click-to-acknowledge reuses the interaction that already exists (click →
+focus the session), so the act of going to look at a session *is* the acknowledgment — no new
+gesture, no menu (UI Principle #3). Keying on `updated_at` makes re-lighting automatic and
+needs no "unreview" event. Gating on `detail` avoids falsely lighting a brand-new session that
+never ran a turn. All of it is display-layer only: the hook contract and status-file schema
+are untouched.
+
+**Validation:** unit-tested the pure state machine across the full lifecycle — fresh
+SessionStart idle → `idle`; running → `running`; Stop with wrap-up → `done`; click/ack →
+`idle`; new prompt → `running`; next Stop (new `updated_at`) → `done` again; Stop with empty
+message → `idle`; blocked/error unaffected (all pass). Rebuilt + reinstalled the app so the
+running bar reflects it.
+
+**Both surfaces:** implemented in the floating bar **and** the VS Code extension. The
+extension keys its status-bar item color on the same `displayState` — `done` renders at full
+brightness (default foreground) while acknowledged `idle` is dimmed (`disabledForeground`),
+the status-bar analog of the bar's bright-white-vs-dim-gray. The extension's click-to-focus
+now also acknowledges (the finish time `updated_at` is passed as a command argument), with the
+same app-local `reviewedAt` map. The extension's reviewed state resets on extension-host
+reload (not persisted) — acceptable for a glance cue. Recompiled, repackaged the `.vsix`, and
+reinstalled via the bundled `code` CLI (takes effect on the next window reload).
+
+---
+
+## 015 — Settings panel: right-click the bar; orientation (horizontal/vertical) first
+
+**Context.** The bar is a chromeless, transparent, non-activating NSPanel with no menu,
+no Dock icon, and no titlebar — there was no place to change anything. The first requested
+setting is bar orientation (horizontal vs vertical), which was already flagged as an open
+item in NEXT_STEPS.md "Decisions needed" (light-bar visual design).
+
+**Options considered (entry point).**
+
+| Option | Pros | Cons |
+| --- | --- | --- |
+| Right-click bar → inline panel *(chosen)* | No new chrome competing with the lights; no extra Tauri window/Rust; window auto-resizes to fit the panel, shrinks back on close | Right-click as the only affordance is slightly non-obvious |
+| Hover gear icon → panel | More discoverable | Adds a persistent visible control that competes with the lights (violates UI Principle #1 — nothing should compete with the one signal that matters) |
+| Separate settings window | Clean separation | Heavier: a second Tauri window + Rust wiring + it appears in the app switcher, for a single toggle |
+
+**Decision.** Right-click anywhere on the bar (dots included) toggles an inline settings
+panel that appears below the lights; the window grows to fit and shrinks back when closed.
+The panel opening rounds the pill's stadium radius to 15px so a tall box doesn't look wrong.
+
+**Options considered (orientation mechanism).** Apply a `.vertical` class to `#bar` that
+switches `#lights` from `flex-direction: row` to `column`. The existing content-hugging
+auto-resize (`resizeToContent`) then reshapes the window with no other geometry changes —
+so orientation is one CSS class plus the resize that already runs.
+
+**Persistence.** The choice is stored in the webview's `localStorage`
+(`claudestatus.orientation`), read on load. This is an app-local *display* preference, so it
+stays out of the hook-written status files entirely — same principle as the app-local
+`reviewedAt` map (decision 014), and it survives restarts without a config file or Rust
+plumbing. Window *position* is still handled by `tauri-plugin-window-state`; this is
+orthogonal.
+
+**Scope.** Frontend only (`index.html`, `styles.css`, `main.js`) — no Rust, no hook, no
+schema change. The panel is built to take more rows as future settings are added.
+
+---
+
+## 016 — Bar click-to-focus via the IDE CLI (not `open -a <folder>`)
+
+**Date:** 2026-07-06
+**Status:** Accepted (fixes the click-to-focus mechanism from M4 / decision 015's `ide` routing)
+
+**Context:** Clicking a light on the floating bar was reported to "open a brand new VS Code"
+instead of focusing the session's existing window. The bar focused via
+`open -a "Visual Studio Code" <cwd>` (a Rust `focus_session` command). Root cause, verified
+live: `open -a <folder>` opens a **new** window whenever macOS can't match the folder to an
+already-open window — and a **full-screen** IDE window living in its own macOS Space is
+*exactly* such an unmatchable case. Since full-screen coding is this app's core use case
+(decision 008), the misfire was the common path, not an edge case.
+
+**Investigation (all observed live, not assumed — Agent Guideline #4):**
+- `ide` routing (decision 015) was **correct** — the visible sessions' `ide` was `vscode` and
+  mapped to the right app; the bug was the focus primitive, not IDE misattribution.
+- **AppleScript window-raise was evaluated and rejected.** Plan: `activate` the IDE, then
+  `AXRaise` the window whose title contains the folder. Titles *are* readable, even for
+  full-screen windows. **But** `System Events`' `every window` only enumerates full-screen
+  windows whose Space is **currently active** — directly observed: the ApplicationBot
+  full-screen window appeared in one enumeration and was absent moments later once a different
+  Space was frontmost. So a session's full-screen window on another Space is invisible to the
+  script → it would fall through to `open -a` → new window, i.e. it wouldn't fix the reported
+  case. It also needs a one-time Accessibility-permission grant. Rejected.
+- **The deep link** `vscode://…/open?session=<id>` stays rejected: the Claude Code URI handler
+  routes through `createSession`/`resumeSession` (confirmed by reading its `webview/index.js`),
+  so it can spawn/resume rather than just focus, plus a URI-consent prompt.
+- **The IDE's own CLI focuses without duplicating** — verified: with the ClaudeStatus folder
+  already open, `code <folder>` kept the standard-window count at 2 (focused, no new window).
+  Because the IDE manages its own window, the focus is Space-aware (Electron `focus()` switches
+  to a full-screen Space), with no Accessibility permission.
+
+**Decision:** `focus_session` now focuses via the IDE CLI:
+`/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code <root>` (or the Cursor
+CLI when `ide == "cursor"`). The **workspace root** is resolved from `~/.claude/ide/*.lock`
+(`workspace_root(cwd)` — longest `workspaceFolders` entry that equals or is a prefix of `cwd`),
+so a session that `cd`'d into a subfolder still focuses the window that has the root open
+(this also cleans up the decision-013 subfolder-label quirk's focus half). If the CLI binary
+is absent, fall back to `open -a "<app>" <root>` (degrade, never break — Agent Guideline #3).
+
+**Reasoning:** The IDE resolving folder→window internally is the only tested primitive that
+(a) focuses across Spaces including full-screen, (b) never spawns a duplicate for an open
+folder, and (c) needs no extra OS permission. The lock-file root resolution reuses the
+window-scoping insight from decision 006 and fixes subfolder `cwd`s for free.
+
+**Scope note:** the bar still focuses at **window** (not tab) granularity, so multiple sessions
+sharing one folder all focus the same window. True per-tab focus needs the extension route
+(`claude-vscode.editor.open <sessionId>`, decision 012), which the extension already uses; the
+standalone bar has no non-spawning path to a specific tab. Deferred.
+
+**Validation:** `workspace_root` maps the live session `cwd`s to their lock-file roots; `code
+<folder>` confirmed to focus-not-duplicate an already-open folder. Rebuilt + reinstalled the
+app. **User to verify** the one thing only visible on their machine: clicking a light for a
+session on another full-screen Space switches to that Space instead of opening a new window.
+
+---
+
+## 017 — Settings: light size + per-state colors (CSS variables); keep-on-screen resize
+
+**Date:** 2026-07-06
+**Status:** Accepted
+
+**Context.** Following the settings panel (decision 015), the next requested settings were
+**light size** and **per-state colors**. Both are pure display preferences.
+
+**Mechanism — CSS custom properties.** Refactored the hard-coded dot geometry and state
+colors in `styles.css` into variables on `#bar` (`--dot-size`, `--c-running/blocked/done/
+idle/error`) with the originals as defaults. Each state's glow is now derived from its base
+color via `color-mix(in srgb, var(--c-x) N%, transparent)` instead of a separate hard-coded
+`rgba()`, so editing one color updates both the fill and its halo. The settings panel writes
+these variables at runtime from `localStorage` — same app-local, frontend-only pattern as
+orientation; defaults mirror the CSS so a cleared/absent pref is indistinguishable from the
+stock bar. Storage: `claudestatus.dotsize` (int px, clamped 8–24) and `claudestatus.colors`
+(JSON `state→hex`). Size is a range slider; colors are five native `<input type="color">`
+swatches; a "Reset to defaults" clears all three display prefs (orientation included).
+
+**Controls considered (colors).** Native `<input type="color">` (chosen — minimal, full
+range, standard) vs. an in-webview preset-swatch palette vs. a hex text field. Native picker
+opens the macOS system color panel; on a **non-activating NSPanel** (decision 008) that may
+not surface — flagged as the item to verify live. Fallback if it fails: in-webview swatches
+or a hex field (no OS panel). Size uses a plain slider, so it carries no such risk.
+
+**Glanceability note.** Recoloring states can undercut UI Principle #1 (unambiguous,
+consistent colors) — e.g. making *blocked* green. Accepted as the user's choice; the sensible
+defaults + one-click Reset keep the stock semantics one click away.
+
+**Panel growth direction — lights stay put, panel grows toward center.** The window
+auto-resizes from a fixed top-left origin, so naively opening the panel below the lights and
+then clamping the window on-screen *moved the lights* (a bottom-edge bar got shoved up). The
+accepted behavior: the **lights never move** on open or close; the panel grows toward the
+screen's middle. Implementation (JS, Tauri window API — no Rust): on toggle, capture the
+`#lights` element's screen position (`currentMonitor` scale + `outerPosition` + its client
+rect); pick the growth direction from the lights' position vs. the monitor center — panel
+*above* when in the bottom half (`flex-direction: column-reverse`), *below* in the top half;
+aligned to the lights' right edge (grows left) in the right half, left edge (grows right) in
+the left half (`align-items` flex-end/start); then after the resize, `setPosition` the window
+so the lights land back on the captured anchor. The anchor math cancels any constant
+content↔window offset, so the lights are pinned exactly. Anchoring runs **only on the
+open/close toggle**, not on every resize — otherwise a poll-tick resize would snap a
+panel-open bar back after the user dragged it. The close path re-captures the *current* lights
+position, so a drag while open is respected (it collapses in place, doesn't jump back to where
+it opened). Superseded the first cut (`keepOnScreen`, a blanket inward clamp) which moved the
+lights and whose `appWindow.currentMonitor()` silently threw (v2 monitor APIs are module-level
+functions, fixed to the module `currentMonitor()`).
+
+**Also.** A **wrapper padding** slider (`--bar-pad`, 2–20px; sides derive as `pad + 4px` to
+keep the pill shape) controls the gap between the lights and the pill edge. `keepOnScreen`'s
+first cut silently no-op'd because it called `appWindow.currentMonitor()` — in Tauri v2 the
+monitor APIs are module-level functions, not window methods, so it threw and was swallowed by
+`resizeToContent`'s catch; fixed by calling the module `currentMonitor()`.
+
+**Scope.** Frontend only (`index.html`, `styles.css`, `main.js`) — no Rust, hook, or schema
+change.

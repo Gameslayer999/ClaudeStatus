@@ -7,12 +7,14 @@
 
 ## Current state
 
-- **Milestones 1–5 done. Shipping as a packaged app.** `/Applications/ClaudeStatus.app` is
-  built and running; it self-installs its hooks on launch (→ `~/.claude/status/report.sh`,
-  registered in `~/.claude/settings.json`). Features live: four-state lights, hover tooltip
-  (task + activity), click-to-focus, subagent count badges, floats over full-screen, drag +
-  position-memory, dead-session pruning. Next: **Milestone 6 (VS Code extension)** and any
-  remaining polish / error-signal calibration. Details of each milestone below.
+- **Milestones 1–6 done — v1 complete.** Two shipping surfaces off one signal layer:
+  (1) `/Applications/ClaudeStatus.app` — floating always-on-top bar of all sessions; self-
+  installs its hooks on launch. (2) The **VS Code extension** — per-window status-bar items.
+  Features: four-state lights, hover (task/activity), click-to-focus, subagent badges, floats
+  over full-screen, drag + position-memory, dead-session pruning. **Remaining is polish /
+  distribution only:** confirm the interim error (red) signal from live `StopFailure`;
+  marketplace-publish the extension; optional launch-at-login toggle; app code signing.
+  Details of each milestone below.
 - **Milestone 1 complete — event model verified on Claude Code 2.1.201** (full evidence in
   [DECISIONS.md](DECISIONS.md) #006). The temporary broad logger has been **uninstalled**;
   the user's global `~/.claude/settings.json` is back to clean (permissions + theme, no
@@ -105,8 +107,10 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
    position remembered, no Dock icon. Polls `list_sessions` (reads `~/.claude/status/sessions/`)
    and renders colored dots. Verified live floating over full-screen VS Code.
 4. **Milestone 4 — Light UI + interaction.** *In progress.* Done: four-color dots;
-   **click-to-focus** (click a light → `open -a "Visual Studio Code" <cwd>` focuses that
-   window; drag handle = pill padding); dead-session pruning (2h, replaced heartbeat-dimming);
+   **click-to-focus** (click a light → focus the session's window via the IDE CLI
+   `code`/`cursor <workspace-root>`, resolved from `~/.claude/ide/*.lock`; Space-aware, never
+   spawns a new window — decision 016, replaced the `open -a <folder>` that duplicated windows;
+   drag handle = pill padding); dead-session pruning (2h, replaced heartbeat-dimming);
    **hover tooltip** (task + current activity, native OS tooltip); **subagent count badge**
    (decision 009). Remaining: optional visual polish (pulse on blocked/error is in CSS;
    spacing/size tuning), and confirm the interim error (red) signal from live `StopFailure`
@@ -123,12 +127,12 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 
 ## Later
 
-6. **Milestone 6 — VS Code extension (decisions 005, 006).** Marketplace-distributed
-   extension: one-click install that ensures the global hooks are present and launches the
-   bar; **auto "this window" scoping** — shows only the sessions whose `cwd` is within the
-   extension host's own `workspaceFolders` (the v1 window-scoping mechanism); plus
-   click-to-focus a specific session's tab (the one integration the app can't do from
-   outside).
+6. ✅ **Milestone 6 — VS Code extension (decisions 005, 006, 012).** *Done 2026-07-05.*
+   `extension/` shows per-window status-bar items (scoped to the window's workspace), hover
+   detail (task/activity/subagents), and click-to-focus a specific session's tab via
+   `claude-vscode.editor.open` (no URI prompt). Guarded hook-ensure. Packaged as `.vsix`,
+   installed via the `code` CLI, verified live. **Remaining:** marketplace publish (needs a
+   verified publisher account — distribution, not build).
 7. **(Promoted into M4) — click-to-focus from the bar.** Clicking a light focuses that
    session's window. Approach: a Rust command opens a `vscode://` deep link
    (`tauri_plugin_opener` is already a dep), with a `code <cwd>` fallback to at least focus the
@@ -136,6 +140,11 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
    (UI Design Principle #3).
 8. **Stretch — polish.** Position persistence across reboots, per-session titles in labels,
    configurable colors/size, optional pulse animation on blocked.
+9. ✅ **Extension parity — "done" light (decision 014).** *Done 2026-07-06.* The VS Code
+   extension now mirrors the bar: a finished-but-unreviewed turn (`idle && detail`) renders at
+   full brightness, acknowledged idle is dimmed (`disabledForeground`); click-to-focus also
+   acknowledges (app-local `reviewedAt`, keyed by finish time). Recompiled, repackaged the
+   `.vsix`, reinstalled — takes effect on the next window reload.
 
 ---
 
@@ -143,13 +152,71 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 
 - **Confirmed event→state mapping** — pending Milestone 1's real-session observations
   (may adjust the doc-sourced names in Current state).
-- **Light bar visual design** — orientation (horizontal/vertical), light shape/size,
-  spacing, label-on-hover vs always-on. Decide once Milestone 4 starts; log in DECISIONS.md.
+- **Light bar visual design** — ~~orientation (horizontal/vertical)~~ **decided (decision
+  015):** now user-toggleable in the settings panel. Remaining: light shape/size, spacing,
+  label-on-hover vs always-on.
 
 ---
 
 ## Recently completed
 
+- **2026-07-06** — **Settings: size + padding + per-state colors, and keep-on-screen (decision
+  017).** Added to the panel: a **size** slider (dot size, 8–24px), a **padding** slider
+  (wrapper padding around the lights, 2–20px), **per-state color** pickers (native
+  `<input type="color">` for running/blocked/done/idle/error — confirmed working live on the
+  NSPanel), and a "Reset to defaults." Refactored the dot geometry, wrapper padding, and state
+  colors in `styles.css` to CSS variables on `#bar`, glow derived from the base color via
+  `color-mix`; JS sets them from `localStorage` (`claudestatus.dotsize`/`.barpad`/`.colors`),
+  same frontend-only pattern as orientation. Also reworked how the panel opens near a
+  screen edge so the **lights stay put** and the panel grows toward the screen middle: on
+  toggle we anchor the `#lights` screen position, pick the direction (panel above when the bar
+  is in the bottom half via `column-reverse`, below in the top half; grows left/right toward
+  center via `align-items`), then reposition the window so the lights land back on the anchor —
+  they never move on open or close. (Replaced the earlier `keepOnScreen` inward-clamp, which
+  moved the lights; its `currentMonitor` call also silently threw — v2 monitor APIs are
+  module-level functions, not window methods.) Anchoring runs only on the toggle, so dragging a
+  panel-open bar isn't snapped back. **Left to do:** `./install.sh` to update the packaged app
+  once confirmed. Frontend only; dev instance compiles + runs clean.
+- **2026-07-06** — **Fixed bar click-to-focus opening new windows (decision 016).** Root cause
+  (verified live): `open -a "Visual Studio Code" <cwd>` spawns a *new* window when the target
+  is a full-screen window on another macOS Space — the app's core use case. Replaced it with
+  the IDE's own CLI (`code`/`cursor <root>`), which resolves folder→window internally (Space-
+  aware, no duplicate window, no Accessibility permission). Workspace root resolved from
+  `~/.claude/ide/*.lock` so a subfolder `cwd` still focuses the right window. Rejected an
+  AppleScript window-raise (System Events can't see full-screen windows on inactive Spaces —
+  observed) and the `vscode://` deep link (routes through create/resumeSession + consent
+  prompt). Rebuilt + reinstalled the app. **User to verify** the cross-Space full-screen focus.
+  Still window- not tab-granular (multiple sessions in one folder focus the same window).
+- **2026-07-06** — **Settings panel + orientation toggle (decision 015).** Added the first
+  settings surface: **right-click the bar** toggles an inline panel below the lights (window
+  grows to fit, shrinks back on close; pill radius rounds to 15px while open). First setting is
+  **orientation** — a horizontal/vertical segmented toggle that flips `#lights` between a row
+  and a column via a `.vertical` class on `#bar`; the existing content-hugging auto-resize
+  reshapes the window, so no other geometry changed. Choice persisted in webview `localStorage`
+  (`claudestatus.orientation`), app-local like `reviewedAt` — no hook/schema change. Frontend
+  only (`index.html`, `styles.css`, `main.js`); dev instance compiles + launches clean.
+  **Unverified by hand:** right-click routing on the non-activating NSPanel and the vertical
+  render — confirm on the running dev bar, then rebuild the packaged app (`./install.sh`).
+- **2026-07-06** — **"Done" vs "idle" light split (decision 014).** Split the single gray idle
+  light into **done** (a turn just finished, output not yet reviewed — steady bright-white,
+  no pulse) and **idle** (acknowledged — dim gray). Reviewed-tracking is app-local: clicking
+  a light acknowledges it (and focuses the session as before), keyed by the finish time so the
+  next finished turn re-lights automatically. Discriminates a finished turn from a fresh idle
+  via `idle && detail != ""` — no hook or schema change. Unit-tested the lifecycle; rebuilt +
+  reinstalled the app. **Also mirrored in the VS Code extension** — status-bar item at full
+  brightness for `done`, dimmed for acknowledged idle, click-to-focus acknowledges; recompiled,
+  repackaged the `.vsix`, reinstalled (effective on next window reload).
+- **2026-07-06** — **Error signal + noise fixes (decision 013).** Red is now `StopFailure`
+  only (confirmed live that tool failures produce only `PostToolUseFailure`, never
+  `StopFailure`); `PostToolUseFailure` is calibration-logged but no longer flips the light.
+  Added the `CLAUDESTATUS_IGNORE` env opt-out for programmatic Claude calls (ApplicationBot's
+  question-classification sessions were showing as fleeting lights). Propagated the hook to
+  all four copies (repo / live / app-embedded / extension-bundled).
+- **2026-07-05** — **Milestone 6 complete.** Built the VS Code extension (`extension/`):
+  per-window status-bar items reading the status files scoped by workspace, hover detail,
+  subagent `×N`, and click-to-focus via `claude-vscode.editor.open` (found by reading Claude
+  Code's own URI handler — avoids the consent prompt). Packaged `.vsix`, installed via the
+  `code` CLI, verified live. Decision 012.
 - **2026-07-05** — **Milestone 5 complete.** Ported the hook installer to Rust
   ([app/src-tauri/src/install.rs](app/src-tauri/src/install.rs), release-gated), embedded
   `report.sh` via `include_str!`, and bundled `ClaudeStatus.app` + `.dmg`. Installed to

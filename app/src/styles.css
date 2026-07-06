@@ -12,12 +12,25 @@ body {
 }
 
 #bar {
+  /* Light size + per-state colors are CSS variables so the settings panel can
+     override them at runtime (JS sets these from localStorage). Defaults here are
+     the originals, so the bar looks right before/without any saved prefs. */
+  --dot-size: 13px;
+  --bar-pad: 9px; /* wrapper padding around the lights; +4px on the sides keeps the pill shape */
+  --c-running: #2ecc71;
+  --c-blocked: #f39c12;
+  --c-done: #ecf0f1;
+  --c-idle: #7f8c8d;
+  --c-error: #e74c3c;
+
   position: fixed;
   top: 0;
   left: 0;
   display: inline-flex;
+  flex-direction: column;
   align-items: center;
-  padding: 9px 13px;
+  gap: 9px;
+  padding: var(--bar-pad) calc(var(--bar-pad) + 4px);
   background: rgba(20, 22, 26, 0.82);
   border: 1px solid rgba(255, 255, 255, 0.09);
   border-radius: 999px;
@@ -29,19 +42,35 @@ body {
 #bar:active {
   cursor: grabbing;
 }
+/* Opening the settings panel turns the pill into a rounded panel — a stadium
+   radius on a tall box looks wrong. */
+#bar.settings-open {
+  border-radius: 15px;
+}
+/* Grow the panel ABOVE the lights (when the bar sits in the bottom half of the
+   screen). DOM order is lights → settings; column-reverse renders settings on top
+   while the lights stay anchored in place. */
+#bar.panel-above {
+  flex-direction: column-reverse;
+}
 
 #lights {
   display: inline-flex;
   align-items: center;
   gap: 10px;
 }
+/* Vertical orientation: stack the lights in a column. The window auto-resizes to
+   hug this shape, so no other geometry needs to change. */
+#bar.vertical #lights {
+  flex-direction: column;
+}
 
 .dot {
   position: relative;
-  width: 13px;
-  height: 13px;
+  width: var(--dot-size);
+  height: var(--dot-size);
   border-radius: 50%;
-  background: #7f8c8d;
+  background: var(--c-idle);
   cursor: pointer;
   transition: background-color 0.2s ease, opacity 0.2s ease, box-shadow 0.2s ease,
     transform 0.1s ease;
@@ -74,20 +103,29 @@ body {
 }
 
 .dot.running {
-  background: #2ecc71;
-  box-shadow: 0 0 8px rgba(46, 204, 113, 0.7);
+  background: var(--c-running);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--c-running) 70%, transparent);
 }
 .dot.blocked {
-  background: #f39c12;
-  box-shadow: 0 0 9px rgba(243, 156, 18, 0.85);
+  background: var(--c-blocked);
+  box-shadow: 0 0 9px color-mix(in srgb, var(--c-blocked) 85%, transparent);
   animation: pulse 1.2s ease-in-out infinite;
 }
+/* Finished a turn, output not yet reviewed. A steady bright light: it stands out
+   as "look here", but does NOT pulse — pulsing is reserved for the act-now states
+   (blocked/error) so a done light never competes with a session that needs input. */
+.dot.done {
+  background: var(--c-done);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--c-done) 60%, transparent);
+}
+/* Reviewed / dormant. Dimmed so an acknowledged session recedes into the background. */
 .dot.idle {
-  background: #7f8c8d;
+  background: var(--c-idle);
+  opacity: 0.55;
 }
 .dot.error {
-  background: #e74c3c;
-  box-shadow: 0 0 9px rgba(231, 76, 60, 0.85);
+  background: var(--c-error);
+  box-shadow: 0 0 9px color-mix(in srgb, var(--c-error) 85%, transparent);
   animation: pulse 1.2s ease-in-out infinite;
 }
 .dot.empty {
@@ -107,4 +145,117 @@ body {
   50% {
     opacity: 0.38;
   }
+}
+
+/* ── Settings panel ─────────────────────────────────────────────────────── */
+
+/* `#settings { display: flex }` would override the UA `[hidden]{display:none}` by
+   specificity, leaving the panel always visible — so hide it with a rule that wins. */
+#settings[hidden] {
+  display: none;
+}
+
+#settings {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  font: 500 11px/1.2 -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  color: rgba(255, 255, 255, 0.82);
+}
+
+#settings .sep {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+#settings .row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+#settings .row-label {
+  white-space: nowrap;
+}
+
+/* Segmented horizontal/vertical toggle. */
+.seg {
+  display: inline-flex;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 7px;
+  overflow: hidden;
+}
+.seg button {
+  appearance: none;
+  border: none;
+  margin: 0;
+  padding: 4px 9px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.7);
+  font: inherit;
+  cursor: pointer;
+}
+.seg button + button {
+  border-left: 1px solid rgba(255, 255, 255, 0.14);
+}
+.seg button:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+.seg button.active {
+  background: #3b82f6;
+  color: #fff;
+}
+
+/* Size + padding sliders. */
+#size-range,
+#pad-range {
+  width: 96px;
+  accent-color: #3b82f6;
+  cursor: pointer;
+}
+
+/* Color rows: a native swatch per state, labeled. */
+#settings .colors {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 12px;
+}
+#settings .crow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+#settings .crow input[type="color"] {
+  width: 22px;
+  height: 16px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  background: none;
+  cursor: pointer;
+}
+#settings .crow input[type="color"]::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+#settings .crow input[type="color"]::-webkit-color-swatch {
+  border: none;
+  border-radius: 3px;
+}
+
+/* Reset link — low-key, right-aligned. */
+#reset-btn {
+  appearance: none;
+  align-self: flex-end;
+  border: none;
+  padding: 2px 0;
+  background: none;
+  color: rgba(255, 255, 255, 0.55);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+#reset-btn:hover {
+  color: rgba(255, 255, 255, 0.85);
 }

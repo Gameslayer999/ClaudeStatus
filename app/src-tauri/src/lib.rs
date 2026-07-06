@@ -17,6 +17,8 @@ struct SessionStatus {
     updated_at: i64,
     task: String,
     detail: String,
+    /// Host IDE ("cursor" or "vscode"), from the hook — drives click-to-focus.
+    ide: String,
     /// agent_type of each currently-running subagent under this session.
     subagents: Vec<String>,
 }
@@ -34,18 +36,49 @@ fn now_unix() -> i64 {
         .unwrap_or(0)
 }
 
-/// Directory holding one JSON file per session.
-/// Honors $CLAUDESTATUS_DIR (same override the hook uses); defaults to
-/// ~/.claude/status/sessions.
-fn sessions_dir() -> PathBuf {
+/// Epoch milliseconds — used as the focus-request token so two clicks in the same
+/// second still read as distinct requests (see write_focus_request).
+fn now_millis() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// Root status directory (~/.claude/status), honoring $CLAUDESTATUS_DIR (same
+/// override the hook uses).
+fn status_root() -> PathBuf {
     if let Ok(dir) = std::env::var("CLAUDESTATUS_DIR") {
-        return PathBuf::from(dir).join("sessions");
+        return PathBuf::from(dir);
     }
     let home = std::env::var("HOME").unwrap_or_default();
-    PathBuf::from(home)
-        .join(".claude")
-        .join("status")
-        .join("sessions")
+    PathBuf::from(home).join(".claude").join("status")
+}
+
+/// Directory holding one JSON file per session (status_root/sessions).
+fn sessions_dir() -> PathBuf {
+    status_root().join("sessions")
+}
+
+/// Hand a specific-session focus request to the per-window VS Code extension
+/// (decision 018). The floating bar can raise the right *window* itself (the IDE
+/// CLI, below) but cannot focus a specific session *tab* — that needs the in-editor
+/// `claude-vscode.editor.open` command, which only the extension can call. The
+/// `vscode://` deep link is the only external lever and it shows a consent popup on
+/// every click (verified live), so instead the bar drops the target session id here
+/// and the extension (which polls the status dir) focuses the tab, popup-free.
+/// `requested_at` is epoch millis so each click is a distinct request.
+fn write_focus_request(session_id: &str) {
+    if session_id.is_empty() {
+        return;
+    }
+    let dir = status_root();
+    let _ = std::fs::create_dir_all(&dir);
+    let body = serde_json::json!({
+        "session_id": session_id,
+        "requested_at": now_millis(),
+    });
+    let _ = std::fs::write(dir.join("focus-request.json"), body.to_string());
 }
 
 /// agent_type of each currently-running subagent, read from the per-session
@@ -104,6 +137,7 @@ fn list_sessions() -> Vec<SessionStatus> {
             updated_at,
             task: v.get("task").and_then(|x| x.as_str()).unwrap_or("").to_string(),
             detail: v.get("detail").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+            ide: v.get("ide").and_then(|x| x.as_str()).unwrap_or("vscode").to_string(),
             subagents,
         });
     }
@@ -140,17 +174,85 @@ fn make_overlay_panel(win: &tauri::WebviewWindow) {
     panel.show();
 }
 
-/// Jump to a session's window by focusing the VS Code window for its workspace
-/// folder. Opening the folder focuses the already-open window (and follows to its
-/// Space) — no Claude invocation, so no URL-permission popup and no new session.
+/// Resolve the IDE workspace root that contains `cwd` from the IDE lock files
+/// (~/.claude/ide/*.lock), each of which lists its window's `workspaceFolders`. A
+/// session that `cd`'d into a subfolder still maps back to the window that has the
+/// *root* open (the raw subfolder path would otherwise open as its own new window).
+/// Returns the longest matching workspace folder, or `cwd` unchanged if none match.
+#[cfg(target_os = "macos")]
+fn workspace_root(cwd: &str) -> String {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let ide_dir = std::path::PathBuf::from(home).join(".claude").join("ide");
+    let mut best = String::new();
+    if let Ok(entries) = std::fs::read_dir(&ide_dir) {
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.extension().and_then(|s| s.to_str()) != Some("lock") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&p) else { continue };
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { continue };
+            let Some(folders) = v.get("workspaceFolders").and_then(|x| x.as_array()) else {
+                continue;
+            };
+            for folder in folders {
+                let Some(f) = folder.as_str() else { continue };
+                let matches = cwd == f || cwd.starts_with(&format!("{f}/"));
+                if matches && f.len() > best.len() {
+                    best = f.to_string();
+                }
+            }
+        }
+    }
+    if best.is_empty() { cwd.to_string() } else { best }
+}
+
+/// Jump to a session's window by focusing it through the **IDE's own CLI**
+/// (`code`/`cursor <folder>`). The IDE resolves the folder to its existing window
+/// and focuses it — switching macOS Spaces (including a full-screen Space) because
+/// the app manages its own window. It only opens a new window if the folder isn't
+/// open anywhere. We focus the *workspace root* (from the lock files) so a subfolder
+/// `cwd` still lands on the right window.
+///
+/// This replaces the old `open -a <folder>` (decision 016): `open -a` spawns a *new*
+/// window whenever macOS can't match an existing one — which is exactly what happens
+/// with full-screen windows in their own Spaces (the app's core use case), since
+/// they aren't reachable from another Space. The IDE CLI has no such limitation and
+/// needs no extra permission (unlike AppleScript window-raising, which can't even see
+/// full-screen windows on inactive Spaces — verified live). If the CLI binary is
+/// missing we fall back to `open -a` (Agent Guideline #3: degrade, never break). The
+/// IDE is chosen from the session's `ide` field (decision 015).
 #[tauri::command]
-fn focus_session(cwd: String) {
+fn focus_session(cwd: String, ide: String, session_id: String) {
+    // Focus the exact session tab via the extension relay (decision 018); the window
+    // raise below only gets us to the right *window*. Written first so the extension
+    // can pick it up while / right after the window comes forward.
+    write_focus_request(&session_id);
     #[cfg(target_os = "macos")]
-    if !cwd.is_empty() {
-        let _ = std::process::Command::new("open")
-            .args(["-a", "Visual Studio Code"])
-            .arg(&cwd)
-            .spawn();
+    {
+        if cwd.is_empty() {
+            return;
+        }
+        let root = workspace_root(&cwd);
+        let (cli, app) = if ide == "cursor" {
+            (
+                "/Applications/Cursor.app/Contents/Resources/app/bin/cursor",
+                "Cursor",
+            )
+        } else {
+            (
+                "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
+                "Visual Studio Code",
+            )
+        };
+        if std::path::Path::new(cli).exists() {
+            let _ = std::process::Command::new(cli).arg(&root).spawn();
+        } else {
+            let _ = std::process::Command::new("open")
+                .args(["-a", app])
+                .arg(&root)
+                .spawn();
+        }
     }
 }
 

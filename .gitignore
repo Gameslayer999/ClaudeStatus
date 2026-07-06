@@ -10,5 +10,12 @@ app/node_modules/
 app/src-tauri/target/
 app/dist/
 
+# VS Code extension build artifacts
+extension/node_modules/
+extension/out/
+extension/*.vsix
+extension/report.sh
+
+
 # OS
 .DS_Store
