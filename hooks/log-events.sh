@@ -20,7 +20,8 @@ EVENT="${1:-unknown}"
   payload="$(cat)"
   ts="$(date +%Y-%m-%dT%H:%M:%S%z)"
   {
-    printf '===== %s  arg=%s =====\n' "$ts" "$EVENT"
+    printf '===== %s  arg=%s  entry=%s  child=%s =====\n' \
+      "$ts" "$EVENT" "${CLAUDE_CODE_ENTRYPOINT:-?}" "${CLAUDE_CODE_CHILD_SESSION:-?}"
     printf '%s\n' "$payload"
   } >>"$LOG_FILE"
 } >/dev/null 2>&1

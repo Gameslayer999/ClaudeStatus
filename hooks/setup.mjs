@@ -22,7 +22,10 @@ const REPORT = join(HOOKS_DIR, 'report.sh');
 
 // The exact events the signal layer consumes (verified contract, DECISIONS.md #006).
 // Tool-scoped events take a "*" matcher (match all tools); lifecycle events take none.
-const SIMPLE = ['SessionStart', 'UserPromptSubmit', 'Stop', 'SessionEnd', 'StopFailure'];
+const SIMPLE = [
+  'SessionStart', 'UserPromptSubmit', 'Stop', 'SessionEnd', 'StopFailure',
+  'SubagentStart', 'SubagentStop',
+];
 const TOOL = ['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionRequest'];
 
 const marker = (entry) => JSON.stringify(entry).includes('report.sh');

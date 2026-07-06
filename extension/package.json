@@ -1,0 +1,39 @@
+{
+  "name": "claudestatus",
+  "displayName": "ClaudeStatus",
+  "description": "Live status of this window's Claude Code sessions, in the status bar.",
+  "version": "0.1.0",
+  "publisher": "claudestatus",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "claudestatus.focusSession",
+        "title": "ClaudeStatus: Focus Session"
+      }
+    ],
+    "configuration": {
+      "title": "ClaudeStatus",
+      "properties": {
+        "claudestatus.ensureHooks": {
+          "type": "boolean",
+          "default": true,
+          "description": "On activation, install the ClaudeStatus hooks into ~/.claude/settings.json if they aren't already present."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "copyhook": "cp ../hooks/report.sh ./report.sh",
+    "compile": "tsc -p ./",
+    "vscode:prepublish": "npm run copyhook && npm run compile"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5"
+  }
+}
