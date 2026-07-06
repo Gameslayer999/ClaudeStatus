@@ -176,6 +176,26 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 
 ## Recently completed
 
+- **2026-07-06** — **Display polish + position persistence + installer auto-restart (decision
+  022).** Rebuilt and installed via `install.sh` — now live. (1) **Even padding in vertical mode**:
+  `#bar.vertical { padding: var(--bar-pad) }` drops the horizontal-only `+4px` side padding so all
+  four sides match (`app/src/styles.css`). (2) **Drag clamp across all monitors + magnetism**:
+  `clampToMonitor()` on the window `moved` event bounds the bar to the union bounding box of every
+  `availableMonitors()` (slides across shared edges, can't leave the outer edges; center-in-a-gap
+  guard pulls it onto the nearest display), with **soft edge magnetism** (`SNAP_LOGICAL = 16`
+  logical px, per-monitor scaled) that pins a near edge flush (`app/src/main.js`). (3) **Position
+  persistence**: saves the **lights' screen anchor** (`{x,y,scale}`, `claudestatus.pos`) — not the
+  window top-left, which depends on settings-panel state — and re-anchors on launch via
+  `anchorLightsTo()` over `center: true`, so restarts/rebuilds/reloads no longer move the bar
+  (`app/src/main.js`). (First cut saved the window top-left and jumped on Reload because the Reload
+  button is inside the panel; fixed.)
+  (4) **Reload button** in the settings-panel footer → `window.location.reload()`
+  (`app/src/index.html` + CSS). (5) **`install.sh` auto-restart**: if an instance was already
+  running, it quits and relaunches the rebuilt app (past the single-instance guard) so rebuilds
+  land in one command; first installs still fall through to the manual Gatekeeper-Open steps.
+  **Left to verify (live):** position actually restores across the *next* rebuild (nothing was
+  saved before this one, so it centered by design); and multi-monitor crossing/magnetism on a real
+  multi-display setup.
 - **2026-07-06** — **Single-instance guard (decision 020) + faster click-to-focus (decision
   021).** (1) **Fixed two bars running at once** — the installed `/Applications` copy and the
   in-repo dev build were both up, drawing overlapping duplicate bars off the same status dir.

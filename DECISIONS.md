@@ -32,6 +32,7 @@
 | 019 | 2026-07-06 | Click a bar light → focus the exact **session tab** (not just its window) via a bar→extension relay: the bar writes `~/.claude/status/focus-request.json` `{session_id, requested_at}`; the per-window extension polls it and calls the popup-free in-editor `claude-vscode.editor.open`. Chosen over the `vscode://…open?session=` deep link, which shows a consent popup on every click (verified live). Complements decision 016's window-raise. Verified end-to-end (bar click from another window → correct tab) | Accepted |
 | 020 | 2026-07-06 | Single-instance guard via `tauri-plugin-single-instance` (release only): a second launch — installed copy or dev build, both keyed by `com.claudestatus.app` — pings the running instance and exits instead of drawing a duplicate overlapping bar. Off in dev so `tauri dev` runs alongside the installed copy | Accepted |
 | 021 | 2026-07-06 | Faster click-to-focus: fire a fast `osascript` System Events window-raise (`set frontmost` + AXRaise by workspace-root basename, ~0.2s) **in addition to** the decision-016 IDE CLI (~1.1s). Fast path handles the same-Space case; CLI still covers cross-Space / full-screen. Needs a one-time Accessibility grant; silently no-ops (falls back to CLI) without it | Accepted |
+| 022 | 2026-07-06 | Persist bar position across restarts/rebuilds in `localStorage` (frontend-only, no window-state plugin), restored on launch over the config's `center: true`; drag bounded to the union of all monitors with soft edge magnetism; a user-facing **Reload** button in the settings panel; `install.sh` auto-quits+relaunches an already-running instance so rebuilds take effect past the single-instance guard | Accepted |
 
 ---
 
@@ -899,3 +900,62 @@ scripted (TCC is user-controlled); it's documented in `install.sh` output as opt
 **Scope.** `app/src-tauri/src/lib.rs` (`raise_window_fast` helper; one call at the top of
 `focus_session`'s macOS block). No change to the CLI path, the extension tab-focus relay
 (decision 019), the schema, hooks, or the installer contract.
+
+---
+
+### 022 — Bar position persistence, all-monitor drag clamp + magnetism, Reload button, installer auto-restart (2026-07-06)
+
+**Context.** Four display/workflow gaps surfaced while iterating: (a) even padding — the `+4px`
+side padding that pills-out a horizontal row left the sides fatter than the top/bottom in vertical
+mode; (b) the bar could be dragged fully off-screen, and an earlier single-monitor clamp trapped it
+on one display; (c) there was no way to reload the webview from the UI; (d) every rebuild recentered
+the bar because the window has `center: true` and nothing persisted its position — and, because of
+the single-instance guard (decision 020), a rebuilt app launched against the still-running old
+instance would just exit, leaving stale code on screen.
+
+**Decision.**
+- **Even padding (vertical):** `#bar.vertical { padding: var(--bar-pad) }` overrides the horizontal
+  `var(--bar-pad) calc(var(--bar-pad) + 4px)` so all four sides match. The `+4px` stays in
+  horizontal mode, where it forms the stadium-pill shape. CSS-only.
+- **Drag clamp across all monitors + magnetism:** on the window `moved` event, `clampToMonitor()`
+  (1) snaps any window edge within `SNAP_LOGICAL = 16` logical px (scaled per-monitor by
+  `scaleFactor`) flush to that monitor edge; (2) clamps to the **union bounding box** of every
+  `availableMonitors()` so the bar slides freely across shared edges but can't leave the outer
+  edges; (3) if the bar's center lands in a dead gap between mismatched displays, pulls it onto the
+  nearest one. Replaces the earlier current-monitor-only clamp. Because the native
+  `data-tauri-drag-region` drag is OS-driven, corrections land reliably on drop (mid-drag
+  `setPosition` can be overridden by the next OS frame) — which is the desired "snap on release."
+- **Position persistence — saves the *lights'* screen anchor, not the window top-left.** The window
+  grows/shrinks around the fixed lights as the settings panel opens/closes, so its top-left depends
+  on panel state; persisting it and restoring onto a differently-sized window shifts the lights
+  (concretely: the Reload button lives *in* the panel, so a reload always saved the panel-open
+  top-left then restored it onto the panel-closed window → the bar jumped). Fix: `onWindowMoved`
+  saves `lightsScreenPos()` (`{x,y,scale}`, `claudestatus.pos`) on each move, and `restoreAnchor()`
+  on launch sizes the bar then `anchorLightsTo(saved)` to land the lights back on that screen point
+  (over `center: true`), re-validating on-screen via `clampToMonitor`. An `anchorReady` flag
+  suppresses saving during startup layout so involuntary `setSize` moves don't clobber the saved
+  anchor before it's restored.
+  Chosen `localStorage` over `tauri-plugin-window-state` to avoid a Rust dependency and a
+  size-restore conflict with the content-hugging `resizeToContent()` (the plugin restores size too,
+  which auto-resize immediately overrides). `localStorage` lives in the webview data dir keyed by
+  the bundle id, so it survives `install.sh` replacing the `.app` bundle — same mechanism that
+  already persists orientation/size/colors (decision 015/017). First-ever launch (no saved pos)
+  still centers.
+- **Reload button:** a low-key link in the settings-panel footer (next to "Reset to defaults")
+  calls `window.location.reload()` — recovers a stuck webview and re-reads prefs without quitting.
+- **Installer auto-restart:** `install.sh` records whether an instance was running *before* the
+  copy; if so (a reinstall of an already-Gatekeeper-approved app), it `pkill`s the old process,
+  waits for the single-instance socket to release, and `open`s the rebuilt app — so rebuilds take
+  effect in one command. First-time installs (nothing running) fall through to the manual
+  right-click-Open instructions, because an unsigned app can't be `open`ed past Gatekeeper
+  non-interactively.
+
+**Scope.** `app/src/main.js` (clamp/persist/restore, Reload wiring), `app/src/index.html` +
+`app/src/styles.css` (vertical padding, Reload button, footer), `install.sh` (conditional
+restart). No change to the status-file schema, the hook contract, or the event→state mapping.
+
+**Verification.** Rebuilt via `install.sh` (auto-quit + relaunch confirmed, single running PID).
+First persistence attempt saved the window top-left and the bar jumped on Reload (the panel-open →
+panel-closed size change described above); corrected to the lights-anchor approach and rebuilt.
+**Left to verify live:** Reload no longer moves the bar, and the anchor restores across a full
+quit/relaunch. Multi-monitor crossing/magnetism not yet observed on a real multi-display setup.
