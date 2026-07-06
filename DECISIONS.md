@@ -30,6 +30,7 @@
 | 017 | 2026-07-06 | Settings: light **size** (slider) + **per-state colors** (native `<input type=color>`), driven by CSS variables on `#bar` from `localStorage`; glow derived via `color-mix`. Plus `keepOnScreen()` — after each resize, shift the window inward if it overflows a monitor edge, so the panel opens "toward the middle." Frontend-only | Accepted |
 | 018 | 2026-07-06 | Cursor support: Cursor natively runs `report.sh` via its Claude-compat bridge (reads `~/.claude/settings.json`), so running/idle/error/remove work for free; native `~/.cursor/hooks.json` entries add the events the bridge drops (`subagentStart/Stop`, `postToolUseFailure`). New `ide` field (`cursor` when `.cursor_version` present, else `vscode`) drives per-IDE click-to-focus; Cursor cwd = `workspace_roots[0]`; blocked is unavailable on Cursor (no event) | Accepted |
 | 019 | 2026-07-06 | Click a bar light → focus the exact **session tab** (not just its window) via a bar→extension relay: the bar writes `~/.claude/status/focus-request.json` `{session_id, requested_at}`; the per-window extension polls it and calls the popup-free in-editor `claude-vscode.editor.open`. Chosen over the `vscode://…open?session=` deep link, which shows a consent popup on every click (verified live). Complements decision 016's window-raise. Verified end-to-end (bar click from another window → correct tab) | Accepted |
+| 020 | 2026-07-06 | Single-instance guard via `tauri-plugin-single-instance` (release only): a second launch — installed copy or dev build, both keyed by `com.claudestatus.app` — pings the running instance and exits instead of drawing a duplicate overlapping bar. Off in dev so `tauri dev` runs alongside the installed copy | Accepted |
 
 ---
 
@@ -824,3 +825,38 @@ touches the per-session status contract (decision 007) and the dumb/fast hook is
 helpers, `focus_session` gains a `session_id` arg), `app/src/main.js` (passes `s.id` →
 `sessionId`), `extension/src/extension.ts` (request reader + relay in `refresh`, watermark seed
 in `activate`). No hook or per-session schema change.
+
+## 020 — Single-instance guard (release only)
+
+**Context.** Two bars were found running at once: the installed `/Applications/ClaudeStatus.app`
+and the in-repo dev build (`app/src-tauri/target/release/…/ClaudeStatus.app`), launched minutes
+apart. Both read the same `~/.claude/status/sessions/` dir and drew identical, overlapping bars.
+Nothing detected or blocked a second copy — `run()` built the Tauri app with no instance guard,
+so any number of copies could run.
+
+**Root cause.** No single-instance mechanism. It surfaces whenever the installed copy (typically
+a Login Item) is up and a dev build is launched during development — the exact workflow here.
+
+**Options considered.**
+
+| Option | Mechanism | Cost |
+|---|---|---|
+| A — `tauri-plugin-single-instance` | Second launch pings the running instance (keyed by the `com.claudestatus.app` identifier) and exits; a callback in the survivor re-shows its window | 1 dep + ~10 lines |
+| B — hand-rolled PID/lock file | Own lockfile check on startup | Reinvents A; stale-lock edge cases |
+| C — do nothing / kill dupes by hand | Discipline only | Recurs; contradicts "self-installing, no manual steps" |
+
+**Decision — Option A.** Register `tauri-plugin-single-instance` as the first plugin in `run()`.
+Because both bundles share the identifier `com.claudestatus.app`, the plugin catches the
+installed copy *and* any dev build. The second process exits immediately; the callback re-shows
+the survivor's `main` window.
+
+**Release-gated (`#[cfg(not(debug_assertions))]`).** The guard is compiled only into release
+builds — the shipped app, where a duplicate is always wrong. In dev it's off, so `npm run tauri
+dev` still runs alongside the installed `/Applications` copy while iterating. This keeps the fix
+from getting in the way of development, at no cost to real users (who only ever run release
+builds).
+
+**Scope.** `app/src-tauri/Cargo.toml` (add `tauri-plugin-single-instance = "2"`),
+`app/src-tauri/src/lib.rs` (`run()` builds a mutable builder, conditionally adds the plugin
+first). No schema, hook, or installer-contract change; takes effect once the app is rebuilt and
+reinstalled.

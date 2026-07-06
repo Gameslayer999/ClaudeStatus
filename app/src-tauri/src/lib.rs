@@ -258,7 +258,26 @@ fn focus_session(cwd: String, ide: String, session_id: String) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default();
+
+    // Single-instance guard (release only). A second launch of the app — the
+    // installed /Applications copy or a dev build, both sharing the identifier
+    // com.claudestatus.app — pings the already-running instance and exits, instead
+    // of drawing a second overlapping bar off the same status dir. Must be the first
+    // plugin registered. Gated off in dev so `npm run tauri dev` still runs while the
+    // installed copy is up.
+    #[cfg(not(debug_assertions))]
+    {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            // The one legitimate copy stays; the newcomer already exited. Make sure
+            // the survivor's bar is visible in case it was hidden.
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.show();
+            }
+        }));
+    }
+
+    builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_nspanel::init())
