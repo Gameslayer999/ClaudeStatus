@@ -124,7 +124,9 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
    **click-to-focus** (click a light → focus the session's window via the IDE CLI
    `code`/`cursor <workspace-root>`, resolved from `~/.claude/ide/*.lock`; Space-aware, never
    spawns a new window — decision 016, replaced the `open -a <folder>` that duplicated windows;
-   drag handle = pill padding); dead-session pruning (2h, replaced heartbeat-dimming);
+   drag handle = pill padding; a fast `osascript` window-raise added for same-Space switches,
+   ~0.2s vs the CLI's ~1.1s — decision 021, needs Accessibility, degrades to the CLI without it);
+   dead-session pruning (2h, replaced heartbeat-dimming);
    **hover tooltip** (task + current activity, native OS tooltip); **subagent count badge**
    (decision 009). Remaining: optional visual polish (pulse on blocked/error is in CSS;
    spacing/size tuning), and confirm the interim error (red) signal from live `StopFailure`
@@ -174,6 +176,60 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 
 ## Recently completed
 
+- **2026-07-06** — **Display polish + position persistence + installer auto-restart (decision
+  022).** Rebuilt and installed via `install.sh` — now live. (1) **Even padding in vertical mode**:
+  `#bar.vertical { padding: var(--bar-pad) }` drops the horizontal-only `+4px` side padding so all
+  four sides match (`app/src/styles.css`). (2) **Drag clamp across all monitors + magnetism**:
+  `clampToMonitor()` on the window `moved` event bounds the bar to the union bounding box of every
+  `availableMonitors()` (slides across shared edges, can't leave the outer edges; center-in-a-gap
+  guard pulls it onto the nearest display), with **soft edge magnetism** (`SNAP_LOGICAL = 16`
+  logical px, per-monitor scaled) that pins a near edge flush (`app/src/main.js`). (3) **Position
+  persistence**: saves the **lights' screen anchor** (`{x,y,scale}`, `claudestatus.pos`) — not the
+  window top-left, which depends on settings-panel state — and re-anchors on launch via
+  `anchorLightsTo()` over `center: true`, so restarts/rebuilds/reloads no longer move the bar
+  (`app/src/main.js`). (First cut saved the window top-left and jumped on Reload because the Reload
+  button is inside the panel; fixed.)
+  (4) **Reload button** in the settings-panel footer → `window.location.reload()`
+  (`app/src/index.html` + CSS). (5) **`install.sh` auto-restart**: if an instance was already
+  running, it quits and relaunches the rebuilt app (past the single-instance guard) so rebuilds
+  land in one command; first installs still fall through to the manual Gatekeeper-Open steps.
+  **Left to verify (live):** position actually restores across the *next* rebuild (nothing was
+  saved before this one, so it centered by design); and multi-monitor crossing/magnetism on a real
+  multi-display setup.
+- **2026-07-06** — **Single-instance guard (decision 020) + faster click-to-focus (decision
+  021).** (1) **Fixed two bars running at once** — the installed `/Applications` copy and the
+  in-repo dev build were both up, drawing overlapping duplicate bars off the same status dir.
+  Root cause: no instance guard. Added `tauri-plugin-single-instance` (release-gated) as the
+  first plugin in `run()`; keyed by the shared `com.claudestatus.app` identifier so it catches
+  both bundles. **Verified:** from a clean state, launching a second copy (either path) exits
+  immediately — 3 rapid launch attempts left exactly one instance. (Observed one transient
+  double-instance while rapidly kill/relaunching during the rebuild; it's a narrow stale-socket
+  race that self-heals — a dead socket → connection-refused → rebind — confirmed live.) (2)
+  **Sped up same-Space window switching** from ~1.15s to ~0.2s: the decision-016 IDE CLI boots a
+  Node runtime every click, so `focus_session` now *also* fires a fast `osascript` System Events
+  raise (`set frontmost` + `AXRaise` by workspace-root basename) before it. Fast path covers the
+  same-Space case; the CLI still fires and covers cross-Space / full-screen. Needs a one-time
+  **Accessibility** grant for ClaudeStatus.app (documented as optional in `install.sh`); without
+  it the `osascript` no-ops and the CLI alone runs — no regression. Touched
+  `app/src-tauri/Cargo.toml`, `app/src-tauri/src/lib.rs` (`raise_window_fast` + guard),
+  `install.sh`. Rebuilt and reinstalled to `/Applications`. **Left to verify:** the focus
+  speedup live once the user grants Accessibility (re-copying the bundle likely reset its TCC
+  grant).
+- **2026-07-06** — **Bar light → focus the exact session tab, not just the window (decision
+  019).** A bar-light click now lands on the specific Claude *session tab*, solving the
+  multiple-sessions-in-one-folder case that window-raise (decision 016) can't. Hybrid: the bar
+  still raises the right window via `code/cursor <root>`, and additionally writes
+  `~/.claude/status/focus-request.json` `{session_id, requested_at(ms)}`; the per-window
+  extension polls it and calls the popup-free in-editor `claude-vscode.editor.open` to reveal
+  that session's panel (advances a per-window watermark so each click fires once; seeded at
+  `activate` so a stale request isn't replayed on reload). Rejected the `vscode://…open?session=`
+  deep link after re-verifying live that it shows a **consent popup on every click** (the old
+  "spawns new agents" note was stale — no new agent spawned — but the popup is real). **Verified
+  end-to-end:** clicked a session's light from another VS Code window → the ClaudeStatus window
+  came forward *and* the exact conversation tab was revealed. Touched `lib.rs`
+  (`write_focus_request`, `focus_session` gained a `session_id` arg), `main.js` (passes `s.id`),
+  `extension/src/extension.ts` (relay). Extension repackaged/reinstalled (`0.1.2`); packaged app
+  rebuilt via `install.sh`. No hook or per-session schema change.
 - **2026-07-06** — **Cursor support (decision 018).** Verified (Cursor 3.10.11, via a temp
   Cursor logger + Cursor's own hook logs) that Cursor bridges Claude Code hooks and exposes
   clean payloads (`session_id`, `workspace_roots`, `cursor_version`, `subagent_id`, `Stop.status`).

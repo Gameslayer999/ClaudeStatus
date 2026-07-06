@@ -64,6 +64,12 @@ body {
 #bar.vertical #lights {
   flex-direction: column;
 }
+/* The default +4px goes on the left/right to pill-out a horizontal row. In a
+   vertical stack that leaves the sides fatter than the top/bottom, so drop it
+   and pad evenly on all four sides. */
+#bar.vertical {
+  padding: var(--bar-pad);
+}
 
 .dot {
   position: relative;
@@ -244,10 +250,15 @@ body {
   border-radius: 3px;
 }
 
-/* Reset link — low-key, right-aligned. */
+/* Footer links — low-key, on one row (Reload left, Reset right). */
+#settings .footer {
+  display: flex;
+  align-self: stretch;
+  justify-content: space-between;
+}
+#reload-btn,
 #reset-btn {
   appearance: none;
-  align-self: flex-end;
   border: none;
   padding: 2px 0;
   background: none;
@@ -256,6 +267,7 @@ body {
   text-decoration: underline;
   cursor: pointer;
 }
+#reload-btn:hover,
 #reset-btn:hover {
   color: rgba(255, 255, 255, 0.85);
 }

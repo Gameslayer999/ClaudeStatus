@@ -207,6 +207,40 @@ fn workspace_root(cwd: &str) -> String {
     if best.is_empty() { cwd.to_string() } else { best }
 }
 
+/// Fast same-Space window raise (decision 021). The IDE CLI below is the correct,
+/// cross-Space raise, but it boots a Node runtime on every click (~1.1s measured).
+/// When the target window is on the *current* Space this osascript raise brings it
+/// forward in ~0.2s. It goes through System Events (`set frontmost` + AXRaise), which
+/// needs one permission — Accessibility — and no per-app Automation prompt. It can't
+/// see full-screen windows on inactive Spaces, so it is strictly best-effort: we
+/// always *also* fire the CLI, which handles the cross-Space / full-screen case.
+/// Without an Accessibility grant this silently no-ops and the CLI alone runs (no
+/// regression vs. the old behavior). The window is matched by the workspace-root
+/// basename — the project folder, which appears in the IDE window title.
+#[cfg(target_os = "macos")]
+fn raise_window_fast(root: &str, ide: &str) {
+    let name = std::path::Path::new(root)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+    if name.is_empty() {
+        return;
+    }
+    let proc = if ide == "cursor" { "Cursor" } else { "Code" };
+    // Escape for an AppleScript double-quoted string literal.
+    let esc = name.replace('\\', "\\\\").replace('"', "\\\"");
+    let script = format!(
+        "tell application \"System Events\" to tell process \"{proc}\"\n\
+           set frontmost to true\n\
+           set ws to (windows whose title contains \"{esc}\")\n\
+           if (count of ws) > 0 then perform action \"AXRaise\" of item 1 of ws\n\
+         end tell"
+    );
+    let _ = std::process::Command::new("osascript")
+        .args(["-e", &script])
+        .spawn();
+}
+
 /// Jump to a session's window by focusing it through the **IDE's own CLI**
 /// (`code`/`cursor <folder>`). The IDE resolves the folder to its existing window
 /// and focuses it — switching macOS Spaces (including a full-screen Space) because
@@ -234,6 +268,10 @@ fn focus_session(cwd: String, ide: String, session_id: String) {
             return;
         }
         let root = workspace_root(&cwd);
+        // Fast path first: raise the window in ~0.2s if it's on the current Space.
+        // The CLI below always runs too, covering the cross-Space / full-screen case
+        // the fast path can't reach (decision 021).
+        raise_window_fast(&root, &ide);
         let (cli, app) = if ide == "cursor" {
             (
                 "/Applications/Cursor.app/Contents/Resources/app/bin/cursor",
@@ -258,7 +296,26 @@ fn focus_session(cwd: String, ide: String, session_id: String) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default();
+
+    // Single-instance guard (release only). A second launch of the app — the
+    // installed /Applications copy or a dev build, both sharing the identifier
+    // com.claudestatus.app — pings the already-running instance and exits, instead
+    // of drawing a second overlapping bar off the same status dir. Must be the first
+    // plugin registered. Gated off in dev so `npm run tauri dev` still runs while the
+    // installed copy is up.
+    #[cfg(not(debug_assertions))]
+    {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            // The one legitimate copy stays; the newcomer already exited. Make sure
+            // the survivor's bar is visible in case it was hidden.
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.show();
+            }
+        }));
+    }
+
+    builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_nspanel::init())

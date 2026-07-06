@@ -4,8 +4,9 @@
 // rebuilt each poll) so hovering a light never dismisses its tooltip.
 
 const { invoke } = window.__TAURI__.core;
-// `currentMonitor` is a module-level function in Tauri v2 (not a window method).
-const { getCurrentWindow, currentMonitor } = window.__TAURI__.window;
+// `currentMonitor` / `availableMonitors` are module-level functions in Tauri v2
+// (not window methods).
+const { getCurrentWindow, currentMonitor, availableMonitors } = window.__TAURI__.window;
 // LogicalSize / PhysicalPosition live in the dpi namespace in Tauri v2; fall back
 // to the window namespace just in case.
 const LogicalSize =
@@ -28,6 +29,7 @@ let emptyEl = null;
 // survive restarts without touching the hook-written status files). Right-clicking
 // the bar toggles the settings panel.
 const ORIENT_KEY = "claudestatus.orientation"; // "horizontal" | "vertical"
+const POS_KEY = "claudestatus.pos"; // last #lights screen anchor {x,y,scale} (physical px), restored on launch
 
 function currentOrientation() {
   return localStorage.getItem(ORIENT_KEY) === "vertical" ? "vertical" : "horizontal";
@@ -184,6 +186,11 @@ function initSettings() {
     if (input) setColor(input.dataset.state, input.value);
   });
   document.getElementById("reset-btn").addEventListener("click", resetPrefs);
+  // Reload the webview — picks up frontend changes and recovers from any stuck
+  // state without quitting/relaunching the app.
+  document.getElementById("reload-btn").addEventListener("click", () => {
+    window.location.reload();
+  });
 }
 
 // Reviewed-state tracking (app-local; decision 014). A session that just finished
@@ -336,6 +343,153 @@ async function resizeToContent() {
   }
 }
 
+// Magnetic snap distance (logical px) for pinning the bar flush to a monitor edge.
+const SNAP_LOGICAL = 16;
+
+// Keep the bar on-screen across ALL monitors, with soft edge magnetism. Native
+// drag regions let the OS move the window freely, so on each move we correct it in
+// three steps: (1) snap any window edge sitting within SNAP of a monitor edge flush
+// to it — easy pinning; (2) clamp the window inside the bounding box of every
+// monitor so it can't leave the outer edges, while still sliding freely across the
+// shared edges between displays; (3) if the bar's center lands in a dead gap
+// between mismatched monitors, pull the whole bar onto the nearest one so it can
+// never be lost. Re-entrancy is safe — the corrected position is in-bounds, so the
+// setPosition it triggers produces a no-op moved event.
+async function clampToMonitor(pos) {
+  if (!PhysicalPosition) return;
+  let monitors = [];
+  try {
+    if (availableMonitors) monitors = await availableMonitors();
+    if (!monitors.length && currentMonitor) {
+      const m = await currentMonitor();
+      if (m) monitors = [m];
+    }
+  } catch (_) {
+    return;
+  }
+  if (!monitors.length) return;
+
+  let size;
+  try {
+    size = await appWindow.outerSize();
+  } catch (_) {
+    return;
+  }
+  const w = size.width;
+  const h = size.height;
+  let x = pos.x;
+  let y = pos.y;
+
+  // Per-monitor rectangles (physical px) with a scale-aware snap zone.
+  const rects = monitors.map((m) => ({
+    l: m.position.x,
+    t: m.position.y,
+    r: m.position.x + m.size.width,
+    b: m.position.y + m.size.height,
+    snap: Math.round(SNAP_LOGICAL * (m.scaleFactor || 1)),
+  }));
+
+  // (1) Edge magnetism — snap flush to any monitor edge within its snap zone.
+  for (const m of rects) {
+    if (Math.abs(x - m.l) <= m.snap) x = m.l;
+    if (Math.abs(x + w - m.r) <= m.snap) x = m.r - w;
+    if (Math.abs(y - m.t) <= m.snap) y = m.t;
+    if (Math.abs(y + h - m.b) <= m.snap) y = m.b - h;
+  }
+
+  // (2) Clamp inside the bounding box of all monitors.
+  const minX = Math.min(...rects.map((m) => m.l));
+  const minY = Math.min(...rects.map((m) => m.t));
+  const maxX = Math.max(...rects.map((m) => m.r)) - w;
+  const maxY = Math.max(...rects.map((m) => m.b)) - h;
+  if (maxX >= minX) x = Math.max(minX, Math.min(x, maxX));
+  if (maxY >= minY) y = Math.max(minY, Math.min(y, maxY));
+
+  // (3) Gap guard — if the bar's center isn't on any monitor (a dead zone between
+  //     mismatched displays), pull the whole bar onto the nearest monitor.
+  const cx = x + w / 2;
+  const cy = y + h / 2;
+  const onScreen = rects.some((m) => cx >= m.l && cx < m.r && cy >= m.t && cy < m.b);
+  if (!onScreen) {
+    let best = rects[0];
+    let bestD = Infinity;
+    for (const m of rects) {
+      const dx = cx < m.l ? m.l - cx : cx > m.r ? cx - m.r : 0;
+      const dy = cy < m.t ? m.t - cy : cy > m.b ? cy - m.b : 0;
+      const d = dx * dx + dy * dy;
+      if (d < bestD) {
+        bestD = d;
+        best = m;
+      }
+    }
+    x = Math.max(best.l, Math.min(x, best.r - w));
+    y = Math.max(best.t, Math.min(y, best.b - h));
+  }
+
+  if (x !== pos.x || y !== pos.y) {
+    try {
+      await appWindow.setPosition(new PhysicalPosition(x, y));
+    } catch (_) {
+      /* fail-silent */
+    }
+  }
+}
+
+// Persist WHERE THE LIGHTS SIT on screen — not the window's top-left. The window
+// grows/shrinks around the fixed lights as the settings panel opens/closes, so its
+// top-left depends on panel state; restoring it onto a differently-sized window
+// would shift the lights (e.g. reloading from the panel-open state). The lights'
+// screen position is stable, so that's what we save and restore. localStorage lives
+// in the webview data dir (keyed by bundle id), so it survives replacing the .app.
+function saveAnchor(a) {
+  try {
+    localStorage.setItem(
+      POS_KEY,
+      JSON.stringify({ x: Math.round(a.x), y: Math.round(a.y), scale: a.scale })
+    );
+  } catch (_) {
+    /* fail-silent */
+  }
+}
+
+function loadAnchor() {
+  try {
+    const a = JSON.parse(localStorage.getItem(POS_KEY) || "null");
+    if (a && Number.isFinite(a.x) && Number.isFinite(a.y) && Number.isFinite(a.scale)) return a;
+  } catch (_) {
+    /* fall through */
+  }
+  return null;
+}
+
+// Don't persist the involuntary window moves that setSize triggers during startup
+// layout — only start saving once we've restored the user's position.
+let anchorReady = false;
+
+// On any move: keep the bar on-screen, then (once ready) remember the lights' new
+// screen position so a restart/rebuild reopens them here instead of recentering.
+async function onWindowMoved(pos) {
+  await clampToMonitor(pos);
+  if (!anchorReady) return;
+  const a = await lightsScreenPos();
+  if (a) saveAnchor(a);
+}
+
+// Restore the saved lights position on launch (overriding the config's center):
+// size the bar to its final shape, then shift the window so the lights land back on
+// the saved anchor. clampToMonitor keeps it on-screen if the display setup changed.
+async function restoreAnchor() {
+  const saved = loadAnchor();
+  if (!saved) return;
+  await resizeToContent();
+  await anchorLightsTo(saved);
+  try {
+    await clampToMonitor(await appWindow.outerPosition());
+  } catch (_) {
+    /* fail-silent */
+  }
+}
+
 // Physical screen coordinates of the #lights element's top-left corner.
 async function lightsScreenPos() {
   if (!currentMonitor) return null;
@@ -399,7 +553,7 @@ async function chooseGrowthDirection(anchor) {
 async function focusSession(cwd, ide, id) {
   if (!cwd) return;
   try {
-    // sessionId → the extension focuses that exact session's tab (decision 018);
+    // sessionId → the extension focuses that exact session's tab (decision 019);
     // cwd/ide → the backend raises the right window. Tauri maps camelCase → snake_case.
     await invoke("focus_session", { cwd, ide: ide || "vscode", sessionId: id || "" });
   } catch (_) {
@@ -416,8 +570,16 @@ async function tick() {
   }
 }
 
-window.addEventListener("DOMContentLoaded", () => {
+window.addEventListener("DOMContentLoaded", async () => {
   initSettings();
-  tick();
+  // Bound native drags to the monitor (can't be dragged off-screen) and remember the
+  // lights' resting position. Registered before restore so restore's own moves are
+  // clamped; anchorReady stays false until restore finishes so those moves aren't saved.
+  if (appWindow.onMoved) {
+    appWindow.onMoved(({ payload }) => onWindowMoved(payload));
+  }
+  await tick(); // first render, so the bar has its real size before we anchor it
+  await restoreAnchor(); // put the lights back where the user left them
+  anchorReady = true;
   setInterval(tick, POLL_MS);
 });
