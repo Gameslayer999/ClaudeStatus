@@ -18,6 +18,10 @@
 | 005 | 2026-07-05 | Install model: global hooks (install once per machine) delivered via a self-installing app **and** an optional VS Code extension | Accepted |
 | 006 | 2026-07-05 | Verified event→state mapping on Claude Code 2.1.201 (blocked = `PermissionRequest`, not `Notification`); window scoping = workspace folder via `~/.claude/ide/*.lock`, auto "this window" is the extension's job | Accepted |
 | 007 | 2026-07-05 | Status store: one file per session (`~/.claude/status/sessions/<id>.json`), not a single shared JSON — refines #002 | Accepted |
+| 008 | 2026-07-05 | macOS overlay: non-activating NSPanel (via `tauri-nspanel`) + Accessory app — the only way to float over other apps' full-screen spaces | Accepted |
+| 009 | 2026-07-05 | Hover tooltip (task + activity) and subagent tracking (count badge) — subagents tracked by SubagentStart/Stop lifecycle only (their tool calls aren't attributable) | Accepted |
+| 010 | 2026-07-05 | Subagent storage: one marker file per subagent (`sessions/<id>.subagents/<agent_id>`), not a field in the session JSON — parallel subagents were racing the shared file | Accepted |
+| 011 | 2026-07-05 | Packaging: self-installing app — bundles the hook (`include_str!`), writes it to `~/.claude/status/report.sh` and registers it on launch (release builds only); ships `.app` + `.dmg` + `install.sh` | Accepted |
 
 ---
 
@@ -262,3 +266,137 @@ installed live — confirmed real-time population of `~/.claude/status/sessions/
 sessions. Error signal still interim: `report.sh` mirrors `PostToolUseFailure`/`StopFailure`
 to `~/.claude/status/calibration.log` (event/session/tool only, no `tool_input`) to confirm
 the real red trigger from live data.
+
+## 008 — macOS overlay: non-activating NSPanel + Accessory app
+
+**Date:** 2026-07-05
+**Status:** Accepted
+**Stack note:** Rust toolchain installed via rustup (1.96, minimal profile); app scaffolded
+with `create-tauri-app` (Tauri v2, vanilla template, static frontend served from `../src`,
+`withGlobalTauri`). Transparency requires `app.macOSPrivateApi: true`.
+
+**Context:** The bar must be a small, borderless, transparent, always-on-top, drag-to-position
+window that stays visible over **everything** — including when the user switches to another
+app's **full-screen** space (the primary use case: coding in full-screen VS Code). Getting
+that behavior on macOS took several escalating attempts, each ruled out by live testing:
+
+| Attempt | Result |
+|---|---|
+| tao `set_always_on_top(true)` (config `alwaysOnTop`) — floating window level | Gets covered when another window is focused |
+| Native `NSWindow.setLevel(25)` + `collectionBehavior(CanJoinAllSpaces \| FullScreenAuxiliary \| Stationary)` via objc2 | Stays on top **within** a Space, but not over another app's full-screen space |
+| + `ActivationPolicy::Accessory` (no Dock icon, not space-managed) | Still not over full-screen |
+| **Non-activating NSPanel** (`tauri-nspanel`) + Accessory | **Works** — floats over third-party full-screen without stealing focus or switching Spaces |
+
+**Decision:** Convert the main window into a **non-activating NSPanel** using the
+`tauri-nspanel` crate (git, `v2` branch) and run the app as an **Accessory** app. Panel
+config (from the crate's `fullscreen` example): level `4` (NSFloatingWindowLevel), style mask
+`NSWindowStyleMaskNonActivatingPanel` (`1<<7`), collection behavior
+`FullScreenAuxiliary | CanJoinAllSpaces`. Also: window auto-sizes to its content (measured
+**after** paint via double-rAF, clamped to a minimum, so it never shrinks to 0 and blocks
+clicks behind it — a bug that made it invisible at first); position is remembered via
+`tauri-plugin-window-state`.
+
+**Reasoning:** macOS only lets a **non-activating panel** sit over another application's
+full-screen window; a normal window (any level / collection behavior) cannot. The Accessory
+policy removes the Dock icon (correct for a status-bar utility) and stops the window from
+being space-managed. `tauri-nspanel` does the NSWindow→NSPanel conversion cleanly and
+resolved against our Tauri 2.11 with no version conflict, so it beat hand-rolling the class
+swap in objc2. Superseded the objc2 `NSWindow` approach that only worked within a Space.
+
+## 009 — Hover detail (task + activity) and subagent count badge
+
+**Date:** 2026-07-05
+**Status:** Accepted
+
+**Context:** Two Milestone-4 features: (a) hovering a light should show what the agent is
+working on; (b) surface subagents. Both hinge on what the hooks expose.
+
+**What the hooks give us (verified live):**
+- `UserPromptSubmit.prompt` = the turn's task; `PreToolUse.tool_name`/`tool_input` = current
+  activity; `Stop.last_assistant_message` = the wrap-up. `report.sh` distills these into two
+  fields per session — `task` (carried across the turn via a read-merge of the prior file)
+  and `detail` (current activity) — storing only short truncated summaries, never full
+  `tool_input`.
+- **Subagents:** `SubagentStart`/`SubagentStop` fire and carry `agent_id` + `agent_type`
+  under the **parent's** `session_id`. Crucially, a subagent's own tool calls fire
+  `PreToolUse`/`PostToolUse` with the parent `session_id` and **no `agent_id`** — so an
+  individual tool call cannot be attributed to a specific subagent.
+
+**Decision:**
+- Tooltip = native OS `title` (multi-line): `name — state`, `↳ task`, subagent summary,
+  `detail`. Native tooltip chosen because the window is sized to hug the pill, so a custom
+  in-window tooltip would be clipped; the OS tooltip renders outside the window bounds.
+- Subagents tracked as a `{agent_id: agent_type}` map in the session file — added on
+  `SubagentStart`, removed on `SubagentStop`, cleared when the turn goes idle. Shown as a
+  **count badge** on the light (chosen over mini sub-dots / hover-only); hover lists the
+  types grouped with counts.
+- Because subagent tool calls aren't attributable, we track **lifecycle only** (which types
+  are running, how many, and each one's final message) — **not** each subagent's live tool.
+
+**Frontend note:** dots are reconciled in place (keyed by id), not rebuilt each poll, so
+updating a title/badge never dismisses an open hover tooltip. Window resize adds a small pad
+so the corner badge isn't clipped.
+
+**Validation:** `report.sh` unit-tested (task capture + carry-forward; subagent add/remove/
+clear). Live: a concurrent poller confirmed a real subagent appeared in the parent's status
+file for its full run and cleared on completion.
+
+## 010 — Subagent storage: one marker file per subagent
+
+**Date:** 2026-07-05
+**Status:** Accepted (refines #009, applies #007 one level deeper)
+
+**Context:** #009 first stored subagents as a `{agent_id: agent_type}` map inside the
+session JSON, updated by a read-modify-write in the hook. Live testing with **two parallel
+subagents** exposed a race: they share the parent's `session_id`, so their `SubagentStart`
+hooks (and the flood of `PreToolUse` events from their tool calls, which also rewrite the
+session file) do concurrent read-modify-writes on the *same* file and clobber each other —
+only 1 of 2 subagents registered. Per-session files (#007) removed cross-session contention
+but not *within*-session contention.
+
+**Decision:** Store each subagent as its own marker file:
+`sessions/<session_id>.subagents/<agent_id>` with the `agent_type` as contents. `SubagentStart`
+creates the file, `SubagentStop` removes it, `Stop`/`SessionStart`/`SessionEnd` clear the dir.
+The session JSON no longer carries subagents; the app reads the marker dir. Subagent events
+are handled in a dedicated early branch of the hook — they never touch the session JSON.
+
+**Reasoning:** One file per subagent means concurrent starts/stops operate on **different**
+files, so there is no shared mutable state to race — the same insight as #007, one level
+down. Verified: 8 concurrent `SubagentStart` for one session produced 8 markers (0 lost);
+3 concurrent `SubagentStop` left exactly the right 5.
+
+## 011 — Packaging: self-installing app (delivers decision 005)
+
+**Date:** 2026-07-05
+**Status:** Accepted
+
+**Context:** Decision 005 chose a self-installing app so install is one action and covers
+every project/window. Milestone 5 delivers it: a real `ClaudeStatus.app` (built with
+`tauri build`) that wires up its own hooks with no node/repo dependency.
+
+**Decision & mechanism:**
+- The hook script is **embedded** into the binary at compile time
+  (`include_str!("../../../hooks/report.sh")`) so the `.app` is self-contained and the
+  installed hook always matches the shipped version.
+- On launch (`app/src-tauri/src/install.rs::ensure_installed`, **release builds only** —
+  `#[cfg(not(debug_assertions))]`), the app writes the script to a stable, app-independent
+  path `~/.claude/status/report.sh`, creates `sessions/`, and merges the 11 hook entries into
+  `~/.claude/settings.json` — idempotent (dedup by the `report.sh` marker), reversible
+  (one-time `settings.json.claudestatus-bak`), non-clobbering (leaves other settings/hooks).
+  This is the `setup.mjs` logic ported to Rust (serde_json).
+- **Dev vs release split:** dev builds do **not** self-install, so `hooks/report.sh` edits
+  stay live without a rebuild (dev registers the repo path via `node hooks/setup.mjs`); the
+  release app owns the `~/.claude/status/report.sh` copy.
+- Ships `.app` + `.dmg`; `install.sh` builds from source and copies to `/Applications`.
+  Accessory app (no Dock icon); **launch-at-login is a documented manual step** (Login Items)
+  — a `tauri-plugin-autostart` toggle is a future enhancement, not in v1.
+
+**Trade-off — code signing:** the app is unsigned (ad-hoc). Locally-built copies run without
+friction (no quarantine attribute), but a **downloaded/redistributed** copy hits Gatekeeper
+and needs a one-time right-click → Open. Acceptable for personal use; real signing/notarizing
+is out of scope for v1.
+
+**Validation:** built the bundle; installed to `/Applications`; launched it; confirmed it
+rewrote the hook path from the repo to `~/.claude/status/report.sh`, registered all 11 events
+with exactly one entry each (dedup worked), wrote the executable script, backed up settings,
+and preserved `permissions`/`theme`.

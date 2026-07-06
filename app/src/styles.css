@@ -37,11 +37,40 @@ body {
 }
 
 .dot {
+  position: relative;
   width: 13px;
   height: 13px;
   border-radius: 50%;
   background: #7f8c8d;
-  transition: background-color 0.2s ease, opacity 0.2s ease, box-shadow 0.2s ease;
+  cursor: pointer;
+  transition: background-color 0.2s ease, opacity 0.2s ease, box-shadow 0.2s ease,
+    transform 0.1s ease;
+}
+
+/* Subagent count badge, top-right corner of a light. */
+.badge {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  min-width: 9px;
+  height: 13px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: #3b82f6;
+  color: #fff;
+  font: 700 9px/13px -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  text-align: center;
+  box-shadow: 0 0 0 1.5px rgba(20, 22, 26, 0.92);
+  pointer-events: none;
+}
+.dot:hover {
+  transform: scale(1.18);
+}
+.dot.empty {
+  cursor: grab;
+}
+.dot.empty:hover {
+  transform: none;
 }
 
 .dot.running {
