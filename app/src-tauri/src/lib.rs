@@ -61,7 +61,7 @@ fn sessions_dir() -> PathBuf {
 }
 
 /// Hand a specific-session focus request to the per-window VS Code extension
-/// (decision 018). The floating bar can raise the right *window* itself (the IDE
+/// (decision 015). The floating bar can raise the right *window* itself (the IDE
 /// CLI, below) but cannot focus a specific session *tab* — that needs the in-editor
 /// `claude-vscode.editor.open` command, which only the extension can call. The
 /// `vscode://` deep link is the only external lever and it shows a consent popup on
@@ -224,7 +224,7 @@ fn workspace_root(cwd: &str) -> String {
 /// IDE is chosen from the session's `ide` field (decision 015).
 #[tauri::command]
 fn focus_session(cwd: String, ide: String, session_id: String) {
-    // Focus the exact session tab via the extension relay (decision 018); the window
+    // Focus the exact session tab via the extension relay (decision 015); the window
     // raise below only gets us to the right *window*. Written first so the extension
     // can pick it up while / right after the window comes forward.
     write_focus_request(&session_id);

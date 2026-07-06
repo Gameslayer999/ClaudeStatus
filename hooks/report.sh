@@ -13,17 +13,17 @@
 # programmatic/headless Claude calls (e.g. an app classifying text) that shouldn't
 # appear as lights. Set it in the environment where you spawn Claude (decision 013).
 #
-# Contract (Claude Code 2.1.201 — DECISIONS.md #006; Cursor 3.10.11 — #015):
+# Contract (Claude Code 2.1.201 — DECISIONS.md #006; Cursor 3.10.11 — #018):
 #   running  <- UserPromptSubmit | PreToolUse | PostToolUse
 #   blocked  <- PermissionRequest  (Claude only; Cursor has no such event)
 #   idle     <- Stop | SessionStart
 #   error    <- StopFailure  (a real turn/API failure; PostToolUseFailure is a
 #               recovered tool failure and does NOT flip the light — decision 013)
-#            <- Stop with a failed .status  (Cursor turn-level error — #015, interim)
+#            <- Stop with a failed .status  (Cursor turn-level error — #018, interim)
 #   remove   <- SessionEnd
 #   subagent <- SubagentStart (add marker) | SubagentStop (remove marker)
 #
-# Cursor support (decision 015): Cursor natively runs this hook via its Claude-compat
+# Cursor support (decision 018): Cursor natively runs this hook via its Claude-compat
 # bridge; a per-payload `ide` field ("cursor" when .cursor_version is present, else
 # "vscode") drives click-to-focus. Cursor sends the workspace in .workspace_roots[]
 # (not .cwd) and uses camelCase event names (normalized below).
@@ -39,7 +39,7 @@ SESSIONS_DIR="$STATUS_DIR/sessions"
 EVENT="${1:-}"
 
 # Normalize Cursor's camelCase event names to the Claude PascalCase names the
-# rest of this script keys on (decision 015). Cursor runs this same hook two ways:
+# rest of this script keys on (decision 018). Cursor runs this same hook two ways:
 # via its Claude-compat bridge (reads ~/.claude/settings.json, passes PascalCase)
 # and via native ~/.cursor/hooks.json entries (camelCase) for the events the bridge
 # drops — subagents and tool failures. Both paths land on the same logic below.

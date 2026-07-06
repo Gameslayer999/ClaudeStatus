@@ -7,6 +7,20 @@
 
 ## Current state
 
+- **Cursor support added (decision 018) — in verification.** Cursor's native agent is now
+  tracked on the same bar: Cursor bridges Claude Code hooks (runs `~/.claude/status/report.sh`
+  from `~/.claude/settings.json`), so running/idle/error/remove work for free; native
+  `~/.cursor/hooks.json` entries ([hooks/cursor-setup.mjs](hooks/cursor-setup.mjs)) add
+  `subagentStart/Stop` + `postToolUseFailure` (the events the bridge drops). `report.sh` now
+  handles Cursor payloads (`workspace_roots` cwd, camelCase events, `Stop.status` error,
+  `empty-state-draft` skip) and writes an `ide` field driving per-IDE click-to-focus. **Two
+  things left:** (1) a live **folder-open** Cursor run to confirm end-to-end — Cursor runs
+  **no** hooks in a folder-less window (`MainThreadShellExec not initialized`); (2) rebuild the
+  app + port `cursor-setup.mjs` into `install.rs` so the packaged app self-installs the Cursor
+  hooks and the running bar reads `ide`. Verification tooling
+  ([hooks/cursor-log-events.sh](hooks/cursor-log-events.sh),
+  [hooks/cursor-logger-setup.mjs](hooks/cursor-logger-setup.mjs)) kept for future Cursor
+  versions. Blocked (orange) is unavailable on Cursor (no event).
 - **Milestones 1–6 done — v1 complete.** Two shipping surfaces off one signal layer:
   (1) `/Applications/ClaudeStatus.app` — floating always-on-top bar of all sessions; self-
   installs its hooks on launch. (2) The **VS Code extension** — per-window status-bar items.
@@ -160,6 +174,16 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 
 ## Recently completed
 
+- **2026-07-06** — **Cursor support (decision 018).** Verified (Cursor 3.10.11, via a temp
+  Cursor logger + Cursor's own hook logs) that Cursor bridges Claude Code hooks and exposes
+  clean payloads (`session_id`, `workspace_roots`, `cursor_version`, `subagent_id`, `Stop.status`).
+  Taught `report.sh` to handle Cursor payloads and write an `ide` field; wrote
+  [hooks/cursor-setup.mjs](hooks/cursor-setup.mjs) to register the bridge-dropped events natively;
+  made the bar's click-to-focus IDE-aware (Rust + JS, compiles clean). Unit-tested against real
+  captured payloads (VS Code regressions intact). Left the temporary Cursor logger uninstalled.
+  **Not yet live-verified end-to-end** (needs a folder-open Cursor run — Cursor runs no hooks in
+  a folder-less window) and the app still needs a rebuild + `install.rs` port to self-install the
+  Cursor hooks.
 - **2026-07-06** — **Settings: size + padding + per-state colors, and keep-on-screen (decision
   017).** Added to the panel: a **size** slider (dot size, 8–24px), a **padding** slider
   (wrapper padding around the lights, 2–20px), **per-state color** pickers (native

@@ -28,6 +28,7 @@
 | 015 | 2026-07-06 | Settings panel: right-click the bar toggles an inline panel (not a gear icon / separate window); first setting = orientation (horizontal/vertical) via a `.vertical` CSS class + existing auto-resize; persisted in webview `localStorage`, frontend-only | Accepted |
 | 016 | 2026-07-06 | Bar click-to-focus via the IDE's own CLI (`code`/`cursor <root>`), not `open -a <folder>` — `open -a` spawns a new window when the target is a full-screen window on another Space; workspace root resolved from `~/.claude/ide/*.lock` so subfolder `cwd`s map to the right window. AppleScript window-raise rejected (can't see full-screen windows on inactive Spaces) | Accepted |
 | 017 | 2026-07-06 | Settings: light **size** (slider) + **per-state colors** (native `<input type=color>`), driven by CSS variables on `#bar` from `localStorage`; glow derived via `color-mix`. Plus `keepOnScreen()` — after each resize, shift the window inward if it overflows a monitor edge, so the panel opens "toward the middle." Frontend-only | Accepted |
+| 018 | 2026-07-06 | Cursor support: Cursor natively runs `report.sh` via its Claude-compat bridge (reads `~/.claude/settings.json`), so running/idle/error/remove work for free; native `~/.cursor/hooks.json` entries add the events the bridge drops (`subagentStart/Stop`, `postToolUseFailure`). New `ide` field (`cursor` when `.cursor_version` present, else `vscode`) drives per-IDE click-to-focus; Cursor cwd = `workspace_roots[0]`; blocked is unavailable on Cursor (no event) | Accepted |
 | 018 | 2026-07-06 | Click a bar light → focus the exact **session tab** (not just its window) via a bar→extension relay: the bar writes `~/.claude/status/focus-request.json` `{session_id, requested_at}`; the per-window extension polls it and calls the popup-free in-editor `claude-vscode.editor.open`. Chosen over the `vscode://…open?session=` deep link, which shows a consent popup on every click (verified live). Complements decision 016's window-raise | Accepted |
 
 ---
@@ -691,3 +692,135 @@ monitor APIs are module-level functions, not window methods, so it threw and was
 
 **Scope.** Frontend only (`index.html`, `styles.css`, `main.js`) — no Rust, hook, or schema
 change.
+
+## 018 — Cursor support (via Cursor's Claude-hook bridge + native hooks)
+
+**Date:** 2026-07-06
+**Status:** Accepted
+**Evidence:** Cursor **3.10.11**, observed live via a temporary Cursor event logger
+(`hooks/cursor-log-events.sh` + `hooks/cursor-logger-setup.mjs`, kept for re-verifying future
+Cursor versions — parallels the Claude logger of #006) and Cursor's own hook logs under
+`~/Library/Application Support/Cursor/logs/**/cursor.hooks.*.log`, which record each hook's
+full input payload and exit status.
+
+**Context:** The user asked to extend the bar to other IDEs, specifically **Cursor's native
+agent** (Composer/Agent) — not Claude Code running inside Cursor. The signal layer (#001) is
+Claude Code hooks, which fire only for Claude Code, so the initial concern was that Cursor's
+agent would need an entirely separate signal source.
+
+**Findings (verified live):**
+- **Cursor natively bridges Claude Code hooks.** Cursor reads `~/.claude/settings.json` and
+  runs its hooks, mapping its own events onto Claude event names. So the already-installed
+  `~/.claude/status/report.sh` is invoked by Cursor with **exit 0** for `SessionStart`,
+  `UserPromptSubmit`, `PostToolUse`, `Stop`, `SessionEnd`. Cursor sessions therefore already
+  reached the bar — but with bugs (below).
+- **The bridge drops the events we need for the rest.** Cursor logs `PermissionRequest` as
+  "not supported", and `PostToolUseFailure`/`StopFailure`/`SubagentStart` as "unknown,
+  skipping". So error/subagent don't come through the bridge; **blocked has no Cursor event
+  at all**.
+- **Payloads are clean and rich.** Every event carries `session_id` (= `conversation_id`),
+  `hook_event_name`, `workspace_roots[]`, and `cursor_version`. `beforeSubmitPrompt` carries
+  `prompt`; tool events carry `tool_name`/`tool_input`; `subagentStart/Stop` carry
+  `subagent_id` + `subagent_type`; the bridged `Stop` carries `status` (e.g. `completed`).
+- **Two bugs in how the stale `report.sh` read Cursor payloads:** it keyed cwd on `.cwd`, but
+  Cursor puts the workspace in `workspace_roots[]` (session/prompt events have no `.cwd`; tool
+  events carry a *tool-level* `.cwd` like `/tmp`) → blank/incorrect labels. And Cursor fires
+  `sessionStart` for an unopened **`empty-state-draft`** composer → a phantom blank light.
+- **Hard constraint:** Cursor only runs command hooks when a **workspace folder is open**. In
+  a folder-less window every hook fails with `MainThreadShellExec not initialized` (0 ms, no
+  exec), so an agent run in an empty/welcome window produces no signal.
+
+**Decision:**
+- **Reuse the bridge for running/idle/error/remove; add native hooks only for what it drops.**
+  `hooks/cursor-setup.mjs` (idempotent/reversible, mirrors `setup.mjs`) registers
+  `report.sh` in `~/.cursor/hooks.json` for **`subagentStart`, `subagentStop`,
+  `postToolUseFailure`** only — pointed at the same app-maintained `~/.claude/status/report.sh`
+  the bridge calls. Everything else the bridge already forwards, so registering it natively
+  would just double-fire.
+- **`report.sh` learns Cursor** (one script, both IDEs): normalize Cursor's camelCase event
+  names → the Claude PascalCase names it already keys on; detect Cursor via `.cursor_version`;
+  use `workspace_roots[0]` for cwd on Cursor; write a new **`ide`** field
+  (`cursor`/`vscode`); skip the `empty-state-draft` phantom; accept `subagent_id` as the
+  subagent marker key alongside Claude's `agent_id`.
+- **Error (red) on Cursor = `Stop` with a failed `.status`** (the bridged `Stop` carries it),
+  *not* `postToolUseFailure` — consistent with #013 (tool failures are recovered noise;
+  red is turn-level). The exact failure status strings are unverified, so this is **interim**
+  (matched heuristically on `error|fail|abort|cancel`); `postToolUseFailure` is registered for
+  calibration only.
+- **`ide` field drives click-to-focus:** the bar opens the session's host IDE (Cursor vs VS
+  Code) from `ide` (consumed by the focus mechanism of decisions 015/016).
+- **Blocked (orange) is not available on Cursor** — it exposes no "waiting on user" event
+  (its permission prompts are driven *by* hooks, not reported *to* them). Documented limit,
+  parallel to error being the soft spot on Claude Code in #006.
+
+**Reasoning:** Because Cursor already bridges our hook, "another IDE" collapses from a second
+signal layer into a payload-compat pass on one script plus three native hook registrations —
+far less surface than a parallel implementation, and both IDEs run identical logic. Keying
+native registration to only the bridge's gaps avoids redundant double-fires. Deferring blocked
+and marking the error heuristic interim keeps us honest about what's verified (Guideline #4).
+
+**Validation:** `report.sh` unit-tested against the real captured Cursor payloads — Cursor
+prompt→running with `ide:cursor` and label from `workspace_roots`; tool-level `.cwd=/tmp`
+does not override the workspace; `subagentStart/Stop` via `subagent_id` add/remove markers;
+`Stop status=completed`→idle vs `status=aborted`→error; `empty-state-draft` skipped; and VS
+Code Claude Code regressions intact (`ide:vscode`, `.cwd`, `agent_id`). The bar backend/
+frontend compile clean with the `ide` field and IDE-aware focus. **Pending:** a live
+folder-open Cursor run to confirm the end-to-end wiring (three prior attempts each landed in a
+folder-less window, where Cursor runs no hooks); and rebuilding/reinstalling the packaged app
+so the running bar reads `ide` and the app self-installs the Cursor hooks (the `install.rs`
+port of `cursor-setup.mjs`, mirroring how #011 ported `setup.mjs`).
+
+---
+
+## 018 — Bar light click focuses the exact session tab (bar→extension relay)
+
+**Context.** Decision 016 made a bar-light click raise the correct IDE *window* (via the IDE
+CLI). But a single window can host several Claude Code sessions (the user routinely runs 4+ in
+one folder), and window-raising can't distinguish them — clicking any light lands on the same
+window, not the specific agent whose light you clicked. The user asked for the light to bring
+them to the *associated agent*.
+
+**The capability gap.** Focusing a specific session *tab* is done by the in-editor command
+`claude-vscode.editor.open <session_id>` — which only code running *inside* VS Code can call.
+The ClaudeStatus **extension** already uses it for its own status-bar clicks (decision 012),
+popup-free. The floating **bar** is a separate process and can't call it; its only external
+lever is the deep link `vscode://anthropic.claude-code/open?session=<id>`.
+
+**Options considered.**
+
+| Option | Focuses exact tab? | Popup? | Cost |
+|---|---|---|---|
+| A — bar opens the `vscode://…open?session=` deep link | yes | **yes, every click** | tiny (one Rust change) |
+| B — bar → file → extension calls `claude-vscode.editor.open` | yes | no | small file contract + extension watcher |
+| (status quo) window-raise only | no | no | — |
+
+**Verification (Agent Guideline #4).** `NEXT_STEPS.md` recorded that the deep link "spawns new
+agents + a popup." Re-tested live on the installed Claude Code: firing the deep link twice for
+a real session spawned **no** new agent/session (session-file count and Claude process count
+unchanged before/after both fires), but a **consent popup appeared on every fire** and the
+editor did **not** switch tabs. So the "new agent" half was stale, but the popup half is real
+and recurring — disqualifying option A for a glanceable one-click tool (UI Design Principle #3:
+a light leads *straight* to the session, no detour).
+
+**Decision — Option B (hybrid with 016).** On a light click the bar now does both:
+1. **Window raise** — the decision-016 `code/cursor <workspace_root>` call brings the right
+   window forward across Spaces (incl. full-screen).
+2. **Tab focus** — the bar writes `~/.claude/status/focus-request.json`
+   `{ "session_id", "requested_at" }` (`requested_at` = epoch **ms**, so two clicks in the same
+   second stay distinct). Every window's extension polls this on its existing refresh timer;
+   the window whose workspace owns that session calls `claude-vscode.editor.open <session_id>`
+   and advances a per-window `lastFocusReq` watermark so each click fires exactly once. The
+   watermark is seeded at `activate` from the file already on disk, so a stale request isn't
+   replayed on window reload. A request for another window's session is ignored (that window
+   handles it). This is the *only* option that satisfies the request — window focus alone can
+   never disambiguate multiple sessions sharing one folder.
+
+**Why a new file, not the existing schema.** The request is transient bar→extension IPC, not
+session state, so it's a sibling of `sessions/` rather than a field on a session file — it never
+touches the per-session status contract (decision 007) and the dumb/fast hook is unaffected.
+`~/.claude/status/` is user-home runtime state, already outside git.
+
+**Scope.** `app/src-tauri/src/lib.rs` (`write_focus_request`, `status_root`/`now_millis`
+helpers, `focus_session` gains a `session_id` arg), `app/src/main.js` (passes `s.id` →
+`sessionId`), `extension/src/extension.ts` (request reader + relay in `refresh`, watermark seed
+in `activate`). No hook or per-session schema change.

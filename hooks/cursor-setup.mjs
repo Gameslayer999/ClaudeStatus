@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// ClaudeStatus — install/uninstall the native Cursor status hooks (decision 015).
+// ClaudeStatus — install/uninstall the native Cursor status hooks (decision 018).
 //
 // Cursor already runs report.sh via its Claude-compat bridge (it reads
 // ~/.claude/settings.json), which covers running/idle/error/remove. But the bridge
