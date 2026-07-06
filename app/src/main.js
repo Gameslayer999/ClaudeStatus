@@ -399,7 +399,7 @@ async function chooseGrowthDirection(anchor) {
 async function focusSession(cwd, ide, id) {
   if (!cwd) return;
   try {
-    // sessionId → the extension focuses that exact session's tab (decision 018);
+    // sessionId → the extension focuses that exact session's tab (decision 019);
     // cwd/ide → the backend raises the right window. Tauri maps camelCase → snake_case.
     await invoke("focus_session", { cwd, ide: ide || "vscode", sessionId: id || "" });
   } catch (_) {

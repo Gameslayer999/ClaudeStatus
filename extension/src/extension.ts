@@ -33,7 +33,7 @@ function sessionsDir(): string {
   return path.join(statusDir(), "sessions");
 }
 
-// The floating bar drops a focus request here when a light is clicked (decision 018):
+// The floating bar drops a focus request here when a light is clicked (decision 019):
 // { session_id, requested_at (epoch ms) }. Only the window whose workspace owns that
 // session acts on it — focusing the exact tab via claude-vscode.editor.open, which
 // the bar can't call itself. Returns null when there's no (valid) request.
@@ -194,7 +194,7 @@ function refresh(): void {
     }
   }
 
-  // Bar → extension focus relay (decision 018). If the floating bar asked to focus a
+  // Bar → extension focus relay (decision 019). If the floating bar asked to focus a
   // session that lives in THIS window (i.e. one we just rendered), jump to its tab
   // via the popup-free in-editor command. Keyed by requested_at so each click fires
   // once; a request for another window's session is left for that window to handle.

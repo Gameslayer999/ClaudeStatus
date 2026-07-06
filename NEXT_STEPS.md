@@ -174,6 +174,21 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 
 ## Recently completed
 
+- **2026-07-06** — **Bar light → focus the exact session tab, not just the window (decision
+  019).** A bar-light click now lands on the specific Claude *session tab*, solving the
+  multiple-sessions-in-one-folder case that window-raise (decision 016) can't. Hybrid: the bar
+  still raises the right window via `code/cursor <root>`, and additionally writes
+  `~/.claude/status/focus-request.json` `{session_id, requested_at(ms)}`; the per-window
+  extension polls it and calls the popup-free in-editor `claude-vscode.editor.open` to reveal
+  that session's panel (advances a per-window watermark so each click fires once; seeded at
+  `activate` so a stale request isn't replayed on reload). Rejected the `vscode://…open?session=`
+  deep link after re-verifying live that it shows a **consent popup on every click** (the old
+  "spawns new agents" note was stale — no new agent spawned — but the popup is real). **Verified
+  end-to-end:** clicked a session's light from another VS Code window → the ClaudeStatus window
+  came forward *and* the exact conversation tab was revealed. Touched `lib.rs`
+  (`write_focus_request`, `focus_session` gained a `session_id` arg), `main.js` (passes `s.id`),
+  `extension/src/extension.ts` (relay). Extension repackaged/reinstalled (`0.1.2`); packaged app
+  rebuilt via `install.sh`. No hook or per-session schema change.
 - **2026-07-06** — **Cursor support (decision 018).** Verified (Cursor 3.10.11, via a temp
   Cursor logger + Cursor's own hook logs) that Cursor bridges Claude Code hooks and exposes
   clean payloads (`session_id`, `workspace_roots`, `cursor_version`, `subagent_id`, `Stop.status`).

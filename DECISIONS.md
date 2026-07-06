@@ -29,7 +29,7 @@
 | 016 | 2026-07-06 | Bar click-to-focus via the IDE's own CLI (`code`/`cursor <root>`), not `open -a <folder>` — `open -a` spawns a new window when the target is a full-screen window on another Space; workspace root resolved from `~/.claude/ide/*.lock` so subfolder `cwd`s map to the right window. AppleScript window-raise rejected (can't see full-screen windows on inactive Spaces) | Accepted |
 | 017 | 2026-07-06 | Settings: light **size** (slider) + **per-state colors** (native `<input type=color>`), driven by CSS variables on `#bar` from `localStorage`; glow derived via `color-mix`. Plus `keepOnScreen()` — after each resize, shift the window inward if it overflows a monitor edge, so the panel opens "toward the middle." Frontend-only | Accepted |
 | 018 | 2026-07-06 | Cursor support: Cursor natively runs `report.sh` via its Claude-compat bridge (reads `~/.claude/settings.json`), so running/idle/error/remove work for free; native `~/.cursor/hooks.json` entries add the events the bridge drops (`subagentStart/Stop`, `postToolUseFailure`). New `ide` field (`cursor` when `.cursor_version` present, else `vscode`) drives per-IDE click-to-focus; Cursor cwd = `workspace_roots[0]`; blocked is unavailable on Cursor (no event) | Accepted |
-| 018 | 2026-07-06 | Click a bar light → focus the exact **session tab** (not just its window) via a bar→extension relay: the bar writes `~/.claude/status/focus-request.json` `{session_id, requested_at}`; the per-window extension polls it and calls the popup-free in-editor `claude-vscode.editor.open`. Chosen over the `vscode://…open?session=` deep link, which shows a consent popup on every click (verified live). Complements decision 016's window-raise | Accepted |
+| 019 | 2026-07-06 | Click a bar light → focus the exact **session tab** (not just its window) via a bar→extension relay: the bar writes `~/.claude/status/focus-request.json` `{session_id, requested_at}`; the per-window extension polls it and calls the popup-free in-editor `claude-vscode.editor.open`. Chosen over the `vscode://…open?session=` deep link, which shows a consent popup on every click (verified live). Complements decision 016's window-raise. Verified end-to-end (bar click from another window → correct tab) | Accepted |
 
 ---
 
@@ -772,7 +772,7 @@ port of `cursor-setup.mjs`, mirroring how #011 ported `setup.mjs`).
 
 ---
 
-## 018 — Bar light click focuses the exact session tab (bar→extension relay)
+## 019 — Bar light click focuses the exact session tab (bar→extension relay)
 
 **Context.** Decision 016 made a bar-light click raise the correct IDE *window* (via the IDE
 CLI). But a single window can host several Claude Code sessions (the user routinely runs 4+ in

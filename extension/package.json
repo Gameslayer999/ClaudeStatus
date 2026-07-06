@@ -2,11 +2,17 @@
   "name": "claudestatus",
   "displayName": "ClaudeStatus",
   "description": "Live status of this window's Claude Code sessions, in the status bar.",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "publisher": "claudestatus",
-  "engines": { "vscode": "^1.85.0" },
-  "categories": ["Other"],
-  "activationEvents": ["onStartupFinished"],
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
