@@ -176,6 +176,15 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 
 ## Recently completed
 
+- **2026-07-06** — **First public release v0.1.0 (decision 024).** Cut the first GitHub
+  Release. Committed the pending decision-023 work, rebuilt a fresh
+  `ClaudeStatus_0.1.0_aarch64.dmg` (Apple-Silicon-only, unsigned) from the tagged commit,
+  tagged `v0.1.0`, and published the Release with the DMG attached. Rewrote
+  [README.md](README.md) to lead with the DMG download + accurate macOS-15+/26 Gatekeeper
+  steps (`xattr -dr com.apple.quarantine` or "Open Anyway"), keeping `install.sh`
+  build-from-source as the Intel/dev path. **Deferred:** code signing + notarization (removes
+  the Gatekeeper step); a universal (Intel + ARM) binary; Homebrew cask; marketplace-publish
+  the VS Code extension.
 - **2026-07-06** — **Settings: bar opacity slider (decision 023).** Added an **Opacity** slider
   (0–100%) to the settings panel. Drives a new `--bar-opacity` CSS variable on `#bar` that fades
   the whole pill together — fill, border, drop-shadow, and backdrop-blur, all scaled via `calc()`
