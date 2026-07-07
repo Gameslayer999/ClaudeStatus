@@ -176,6 +176,27 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 
 ## Recently completed
 
+- **2026-07-06** — **First public release v0.1.0 (decision 024).** Cut the first GitHub
+  Release. Committed the pending decision-023 work, rebuilt a fresh
+  `ClaudeStatus_0.1.0_aarch64.dmg` (Apple-Silicon-only, unsigned) from the tagged commit,
+  tagged `v0.1.0`, and published the Release with the DMG attached. Rewrote
+  [README.md](README.md) to lead with the DMG download + accurate macOS-15+/26 Gatekeeper
+  steps (`xattr -dr com.apple.quarantine` or "Open Anyway"), keeping `install.sh`
+  build-from-source as the Intel/dev path. **Deferred:** code signing + notarization (removes
+  the Gatekeeper step); a universal (Intel + ARM) binary; Homebrew cask; marketplace-publish
+  the VS Code extension.
+- **2026-07-06** — **Settings: bar opacity slider (decision 023).** Added an **Opacity** slider
+  (0–100%) to the settings panel. Drives a new `--bar-opacity` CSS variable on `#bar` that fades
+  the whole pill together — fill, border, drop-shadow, and backdrop-blur, all scaled via `calc()`
+  with multipliers normalized so 82% reproduces the original look. (A first cut varied only the
+  fill; barely visible when the bar is minimized to a few lights, since the border/blur dominate
+  there — so the chrome now fades too.) Range widened to 0–100 for more travel toward transparent;
+  at 0% the pill vanishes and only the lights float. The lights are separate, fully-opaque
+  elements, so the signal never fades. Same frontend-only `localStorage`
+  (`claudestatus.baropacity`, whole percent) + `applyStyle()` pattern as decision-017; `Reset to
+  defaults` restores 82%. Touches `app/src/index.html`, `app/src/styles.css`, `app/src/main.js`.
+  Rebuilt + reinstalled via `install.sh` (auto-restart), now live. **Left to verify (live):** drag
+  the slider and confirm the whole pill fades smoothly to invisible while the lights stay sharp.
 - **2026-07-06** — **Display polish + position persistence + installer auto-restart (decision
   022).** Rebuilt and installed via `install.sh` — now live. (1) **Even padding in vertical mode**:
   `#bar.vertical { padding: var(--bar-pad) }` drops the horizontal-only `+4px` side padding so all

@@ -56,9 +56,11 @@ function setOrientation(orient) {
 // identical to the stock bar.
 const SIZE_KEY = "claudestatus.dotsize";
 const PAD_KEY = "claudestatus.barpad";
+const OPACITY_KEY = "claudestatus.baropacity";
 const COLORS_KEY = "claudestatus.colors";
 const DEFAULT_SIZE = 13; // px
 const DEFAULT_PAD = 9; // px, wrapper padding around the lights
+const DEFAULT_OPACITY = 82; // percent of pill-fill alpha (matches the CSS default 0.82)
 const DEFAULT_COLORS = {
   running: "#2ecc71",
   blocked: "#f39c12",
@@ -75,6 +77,12 @@ function currentSize() {
 function currentPad() {
   const n = parseInt(localStorage.getItem(PAD_KEY), 10);
   return Number.isFinite(n) ? Math.min(20, Math.max(2, n)) : DEFAULT_PAD;
+}
+
+// Pill-fill opacity, stored as a whole percent (20–100) to match the int slider.
+function currentOpacity() {
+  const n = parseInt(localStorage.getItem(OPACITY_KEY), 10);
+  return Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : DEFAULT_OPACITY;
 }
 
 function currentColors() {
@@ -94,9 +102,11 @@ function applyStyle() {
   const bar = document.getElementById("bar");
   const size = currentSize();
   const pad = currentPad();
+  const opacity = currentOpacity();
   const colors = currentColors();
   bar.style.setProperty("--dot-size", `${size}px`);
   bar.style.setProperty("--bar-pad", `${pad}px`);
+  bar.style.setProperty("--bar-opacity", String(opacity / 100));
   for (const [state, hex] of Object.entries(colors)) {
     bar.style.setProperty(`--c-${state}`, hex);
   }
@@ -104,6 +114,8 @@ function applyStyle() {
   if (range) range.value = String(size);
   const padRange = document.getElementById("pad-range");
   if (padRange) padRange.value = String(pad);
+  const opacityRange = document.getElementById("opacity-range");
+  if (opacityRange) opacityRange.value = String(opacity);
   for (const input of document.querySelectorAll('#colors input[type="color"]')) {
     input.value = colors[input.dataset.state] || DEFAULT_COLORS[input.dataset.state];
   }
@@ -120,6 +132,11 @@ function setPad(px) {
   applyStyle();
 }
 
+function setOpacity(pct) {
+  localStorage.setItem(OPACITY_KEY, String(pct));
+  applyStyle();
+}
+
 function setColor(state, hex) {
   const colors = currentColors();
   colors[state] = hex;
@@ -132,6 +149,7 @@ function resetPrefs() {
   localStorage.removeItem(ORIENT_KEY);
   localStorage.removeItem(SIZE_KEY);
   localStorage.removeItem(PAD_KEY);
+  localStorage.removeItem(OPACITY_KEY);
   localStorage.removeItem(COLORS_KEY);
   applyOrientation(currentOrientation());
   applyStyle();
@@ -179,6 +197,9 @@ function initSettings() {
   });
   document.getElementById("pad-range").addEventListener("input", (e) => {
     setPad(parseInt(e.target.value, 10));
+  });
+  document.getElementById("opacity-range").addEventListener("input", (e) => {
+    setOpacity(parseInt(e.target.value, 10));
   });
   // `input` fires live as the color picker changes, so the bar previews instantly.
   document.getElementById("colors").addEventListener("input", (e) => {

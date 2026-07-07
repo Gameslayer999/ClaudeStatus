@@ -33,6 +33,8 @@
 | 020 | 2026-07-06 | Single-instance guard via `tauri-plugin-single-instance` (release only): a second launch — installed copy or dev build, both keyed by `com.claudestatus.app` — pings the running instance and exits instead of drawing a duplicate overlapping bar. Off in dev so `tauri dev` runs alongside the installed copy | Accepted |
 | 021 | 2026-07-06 | Faster click-to-focus: fire a fast `osascript` System Events window-raise (`set frontmost` + AXRaise by workspace-root basename, ~0.2s) **in addition to** the decision-016 IDE CLI (~1.1s). Fast path handles the same-Space case; CLI still covers cross-Space / full-screen. Needs a one-time Accessibility grant; silently no-ops (falls back to CLI) without it | Accepted |
 | 022 | 2026-07-06 | Persist bar position across restarts/rebuilds in `localStorage` (frontend-only, no window-state plugin), restored on launch over the config's `center: true`; drag bounded to the union of all monitors with soft edge magnetism; a user-facing **Reload** button in the settings panel; `install.sh` auto-quits+relaunches an already-running instance so rebuilds take effect past the single-instance guard | Accepted |
+| 023 | 2026-07-06 | Settings: bar **opacity** slider (0–100%) drives a `--bar-opacity` CSS variable on `#bar` that fades the whole pill together — fill, border, shadow, and backdrop-blur (multipliers normalized so 82% reproduces the original look) — while the lights stay fully opaque so the signal never fades; at 0% the pill vanishes and only the lights float. Fading the chrome (not just the fill) makes the control perceptible when the bar is minimized to a few lights. Persisted in `localStorage` as a whole percent, frontend-only, same pattern as decision 017 size/padding | Accepted |
+| 024 | 2026-07-06 | First public release **v0.1.0**: a git tag + GitHub Release with the prebuilt **Apple-Silicon-only, unsigned** `ClaudeStatus_0.1.0_aarch64.dmg` as the primary install path (build-from-source via `install.sh` kept for Intel/devs). Unsigned/unnotarized → users clear quarantine (`xattr -dr com.apple.quarantine`) or "Open Anyway"; README rewritten to lead with the DMG download and macOS-15+ Gatekeeper steps | Accepted |
 
 ---
 
@@ -959,3 +961,81 @@ First persistence attempt saved the window top-left and the bar jumped on Reload
 panel-closed size change described above); corrected to the lights-anchor approach and rebuilt.
 **Left to verify live:** Reload no longer moves the bar, and the anchor restores across a full
 quit/relaunch. Multi-monitor crossing/magnetism not yet observed on a real multi-display setup.
+
+---
+
+### Decision 023 — Bar opacity slider
+
+**Date:** 2026-07-06 · **Status:** Accepted
+
+**Context.** The bar's pill is drawn with a fixed translucent fill
+(`background: rgba(20, 22, 26, 0.82)`). The user wanted to control how see-through the
+bar is — e.g. make it fade further into the desktop, or make it fully solid.
+
+**Decision.** Add an **Opacity** slider (0–100%) to the settings panel, following the same
+frontend-only `localStorage` + `applyStyle()` pattern as the decision-017 size/padding
+controls. The slider drives a new `--bar-opacity` CSS variable on `#bar` (0–1, the percent / 100).
+
+**The whole pill fades together — fill, border, shadow, and blur — not just the fill.** A first
+cut varied only the fill alpha (`rgba(20, 22, 26, var(--bar-opacity))`), but when the bar is
+minimized to a few lights the fill is a small fraction of the visible chrome — the border and the
+blurred halo dominate — so the slider was barely perceptible there (user feedback). Fix: the
+border, drop-shadow, and backdrop-blur alphas/radius are all scaled by `--bar-opacity` via
+`calc()`, with multipliers **normalized so 82% reproduces the original look** (`0.11 → 0.09`
+border, `0.46 → 0.38` shadow, `17px → 14px` blur). Now the whole pill fades as one; at 0% it
+vanishes entirely and only the lights float. Range widened to 0–100 (was 20–100) for more travel
+in the transparent direction; 100% is already fully opaque (fill alpha 1.0), so that's the solid
+ceiling — there's nowhere past it.
+
+**The lights never fade.** They're separate, fully-opaque elements, so even at 0% the signal
+reads at full strength — preserving UI principle #1 (glanceable) and #2 (attention states stand
+out). When idle with no sessions, the empty-state dot (`rgba(255,255,255,0.18)`, unscaled) stays
+visible as a grab target. Stored as a whole percent to match the integer slider. `Reset to
+defaults` clears it back to 82% (the original CSS value).
+
+**Scope.** `app/src/index.html` (Opacity row, `min=0`), `app/src/styles.css` (`--bar-opacity`
+variable driving fill/border/shadow/blur + shared slider styling), `app/src/main.js`
+(`OPACITY_KEY`/`DEFAULT_OPACITY`, `currentOpacity`, `setOpacity`, `applyStyle` wiring, reset
+cleanup, event listener). No change to the status-file schema, the hook contract, or the
+event→state mapping.
+
+## 024 — First public release (v0.1.0)
+
+**Date:** 2026-07-06
+**Status:** Accepted
+
+**Context:** Milestones 1–6 are done and the app has been running locally off `install.sh`
+for days. To let anyone else install it without a Rust/Node toolchain, we need a
+distributable artifact and a public entry point. This is a distribution decision (it changes
+how a user obtains and trusts the app), so it's logged here per Agent Guideline #9.
+
+**Options considered:**
+
+| Option | Pros | Cons |
+|---|---|---|
+| **GitHub Release with prebuilt DMG** (chosen) | One download, no toolchain; standard channel; `install.sh` stays for devs/Intel | Unsigned → Gatekeeper friction; per-arch artifact |
+| Build-from-source only (status quo) | No new infra; always matches HEAD | Requires Rust + Node + jq; excludes non-developers |
+| Homebrew cask | `brew install` familiarity | Casks want a signed/notarized app or a hosted binary anyway; premature for v0.1.0 |
+
+**Decision:**
+
+- **Tag `v0.1.0`** (matches `tauri.conf.json` / `package.json`) and cut a **GitHub Release**
+  with **`ClaudeStatus_0.1.0_aarch64.dmg`** attached, rebuilt fresh from the tagged commit.
+- **Apple Silicon only** for this release (decision at the user's direction). Intel users
+  build from source via `install.sh`; a universal binary is a future enhancement (needs the
+  `x86_64-apple-darwin` target + a lipo'd build, and the Intel slice would be untested).
+- **Unsigned / unnotarized.** No Apple Developer signing yet, so a downloaded app carries
+  `com.apple.quarantine` and macOS 15+/26 blocks it (the old Finder right-click → Open bypass
+  was removed for downloaded apps). The README documents the two ways past it:
+  `xattr -dr com.apple.quarantine /Applications/ClaudeStatus.app`, or **System Settings →
+  Privacy & Security → Open Anyway**. Code signing + notarization is deferred (Milestone-5
+  note) — it costs a paid Developer account and only removes friction, not capability.
+- **README rewritten** to lead with the DMG download as the primary install path and keep
+  build-from-source as the alternative.
+
+**Reasoning:** A prebuilt DMG is the lowest-friction way to reach non-developers and is the
+conventional macOS distribution channel; GitHub Releases give a stable "latest" URL for free.
+Shipping unsigned is an accepted, documented tradeoff for a v0.1.0 — the Gatekeeper steps are
+a one-time, reversible, fully-scripted action (no manual per-user hand-holding beyond a copy-
+paste). Apple-Silicon-only keeps the first release to a single tested artifact; source build
+covers the rest. No change to the hook contract, status-file schema, or event→state mapping.

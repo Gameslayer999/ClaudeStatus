@@ -17,6 +17,7 @@ body {
      the originals, so the bar looks right before/without any saved prefs. */
   --dot-size: 13px;
   --bar-pad: 9px; /* wrapper padding around the lights; +4px on the sides keeps the pill shape */
+  --bar-opacity: 0.82; /* pill fill alpha; the lights stay fully opaque so the signal never fades */
   --c-running: #2ecc71;
   --c-blocked: #f39c12;
   --c-done: #ecf0f1;
@@ -31,12 +32,19 @@ body {
   align-items: center;
   gap: 9px;
   padding: var(--bar-pad) calc(var(--bar-pad) + 4px);
-  background: rgba(20, 22, 26, 0.82);
-  border: 1px solid rgba(255, 255, 255, 0.09);
+  /* Fill, border, shadow, and blur all fade together with --bar-opacity so the
+     whole pill gets more/less transparent — not just the fill (which is a small
+     fraction of the visible chrome when the bar is minimized to a few lights). The
+     multipliers are normalized so the default 0.82 reproduces the original values
+     (0.09 border / 0.38 shadow / 14px blur); at 0 the pill vanishes and only the
+     lights float. The lights are separate, fully-opaque elements, so the signal
+     never fades. */
+  background: rgba(20, 22, 26, var(--bar-opacity));
+  border: 1px solid rgba(255, 255, 255, calc(var(--bar-opacity) * 0.11));
   border-radius: 999px;
-  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.38);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, calc(var(--bar-opacity) * 0.46));
+  backdrop-filter: blur(calc(var(--bar-opacity) * 17px));
+  -webkit-backdrop-filter: blur(calc(var(--bar-opacity) * 17px));
   cursor: grab;
 }
 #bar:active {
@@ -213,9 +221,10 @@ body {
   color: #fff;
 }
 
-/* Size + padding sliders. */
+/* Size + padding + opacity sliders. */
 #size-range,
-#pad-range {
+#pad-range,
+#opacity-range {
   width: 96px;
   accent-color: #3b82f6;
   cursor: pointer;
