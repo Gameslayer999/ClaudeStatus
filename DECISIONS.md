@@ -35,6 +35,8 @@
 | 022 | 2026-07-06 | Persist bar position across restarts/rebuilds in `localStorage` (frontend-only, no window-state plugin), restored on launch over the config's `center: true`; drag bounded to the union of all monitors with soft edge magnetism; a user-facing **Reload** button in the settings panel; `install.sh` auto-quits+relaunches an already-running instance so rebuilds take effect past the single-instance guard | Accepted |
 | 023 | 2026-07-06 | Settings: bar **opacity** slider (0–100%) drives a `--bar-opacity` CSS variable on `#bar` that fades the whole pill together — fill, border, shadow, and backdrop-blur (multipliers normalized so 82% reproduces the original look) — while the lights stay fully opaque so the signal never fades; at 0% the pill vanishes and only the lights float. Fading the chrome (not just the fill) makes the control perceptible when the bar is minimized to a few lights. Persisted in `localStorage` as a whole percent, frontend-only, same pattern as decision 017 size/padding | Accepted |
 | 024 | 2026-07-06 | First public release **v0.1.0**: a git tag + GitHub Release with the prebuilt **Apple-Silicon-only, unsigned** `ClaudeStatus_0.1.0_aarch64.dmg` as the primary install path (build-from-source via `install.sh` kept for Intel/devs). Unsigned/unnotarized → users clear quarantine (`xattr -dr com.apple.quarantine`) or "Open Anyway"; README rewritten to lead with the DMG download and macOS-15+ Gatekeeper steps | Accepted |
+| 025 | 2026-07-06 | Settings: light **sort** toggle — **Window** (group sessions by workspace folder, default) vs **Urgency** (attention states first). "Window" is proxied by the session `cwd` (hooks expose no true per-window id — #006), so two windows on the same folder merge (accepted limit). Frontend-only sort in `localStorage` (`claudestatus.sort`), same pattern as orientation | Accepted |
+| 026 | 2026-07-06 | Presentation-mode toggle: the bar runs **floating** (the NSPanel, default) **or in the macOS menu bar** — a `tray-icon` NSStatusItem drawn from a webview-rendered dot image (with a condense-to-single-summary-dot option), clicked to reveal the same panel as a popover below it. Amends #003 (menu bar is now an optional mode, not rejected). Settings-panel toggle, `localStorage`-persisted; menu-bar mode forces horizontal; tray ops marshaled to the main thread; icon forced non-template so the dots keep their colors | Accepted |
 
 ---
 
@@ -1039,3 +1041,125 @@ Shipping unsigned is an accepted, documented tradeoff for a v0.1.0 — the Gatek
 a one-time, reversible, fully-scripted action (no manual per-user hand-holding beyond a copy-
 paste). Apple-Silicon-only keeps the first release to a single tested artifact; source build
 covers the rest. No change to the hook contract, status-file schema, or event→state mapping.
+
+---
+
+## 025 — Settings: light sort toggle (Window vs Urgency)
+
+**Date:** 2026-07-06
+**Status:** Accepted
+
+**Context.** The user asked to sort the bar by "what window a session is in." The hard
+constraint (decision 006, re-confirmed): hooks expose **no true per-window identifier** —
+`VSCODE_PID`/`VSCODE_IPC_HOOK` are the shared main VS Code process, identical across windows —
+so the only usable proxy for "which window" is the session's **workspace folder** (its `cwd`).
+Two windows with the same folder open are therefore indistinguishable and merge into one
+group; the user explicitly accepted this limit rather than chase a workaround. The user also
+chose to expose this as a **settings toggle** (like orientation) rather than a fixed order.
+
+**What already existed.** `list_sessions` (Rust) already sorted by the `cwd` **basename**
+(`label`) then `id` — a crude window grouping. Two flaws: a session that `cd`'d into a
+subfolder sorted away from its window's siblings, and two different folders sharing a basename
+(two `app/` dirs) falsely merged.
+
+**Decision & mechanism (frontend only, `app/src/`).**
+- New **Sort** segmented control in the settings panel with two modes, persisted app-local in
+  `localStorage` (`claudestatus.sort`) — same pattern as orientation/size/colors, no hook or
+  status-file schema change:
+  - **Window** (default) — `sortSessions` orders by the full `cwd` path, then `id`. The full
+    path fixes both flaws above: same-basename windows stay distinct, and lexicographic order
+    naturally clusters a workspace root with any subfolder `cwd` beneath it. Stable across
+    polls (only reshuffles when sessions are added/removed).
+  - **Urgency** — orders by rendered `displayState` (`error → blocked → done → running →
+    idle`), tie-broken by the same window key. Surfaces attention states first (UI Principle
+    #2); a light moves only when its own state changes, staying window-grouped within a state.
+- Sorting moved into the frontend `tick()` (was the Rust `list_sessions` sort, now redundant
+  but left as a harmless default order). `setSort` re-orders immediately from the last poll so
+  the bar and the menu-bar tray reflow without waiting a tick. `Reset to defaults` clears the
+  key back to Window.
+
+**Rejected / not done.** A true per-window key (would need the per-window extension or
+lock-file port disambiguation) — declined by the user (accept the merge). A Rust `root` field
+resolving `cwd`→workspace root via the IDE lock files was considered for tighter subfolder
+grouping, but the lexicographic full-`cwd` sort already clusters subfolders adjacent to their
+root, so it wasn't worth the Rust change / rebuild for a frontend-only feature.
+
+**Reasoning.** Keeps the feature in the established frontend-only, `localStorage` settings
+pattern (no hook, schema, or event-mapping change — Agent Decision Framework #1/#2), upgrades
+the pre-existing basename grouping to a correct full-path one for free, and honors the
+signal-layer limit honestly (same-folder windows merge) instead of pretending to a per-window
+fidelity the hooks can't provide.
+
+---
+
+## 026 — Presentation-mode toggle: floating panel ↔ macOS menu bar
+
+**Date:** 2026-07-06
+**Status:** Accepted (amends #003 — menu bar is now an optional *mode*, not rejected outright)
+
+**Context.** The bar has only ever been the floating NSPanel (#003/#008). The user wanted to
+**toggle** it into the macOS menu bar as an alternative presentation, keeping floating. #003
+had explicitly *rejected* a menu-bar app ("Not a repositionable bar placed anywhere on
+screen") — but that was as the sole display layer. As an optional second mode alongside the
+panel, it's additive, so this amends #003 rather than reversing it.
+
+**The core constraint.** The menu bar shows an `NSStatusItem` — an image/title, **not** a web
+view — so the interactive web bar can't render *in* the menu bar. The accumulated web-layer
+value (custom colors #017, per-light tab focus #019, hover tooltips #009, subagent badges,
+done/idle split #014) would be lost by a native re-draw. Confirmed with the user, the chosen
+shape keeps all of it:
+
+- **Live dots in the menu bar** = the tray icon is an **image the webview renders**. Each poll
+  the frontend draws the dots to an offscreen `<canvas>` (reusing `displayState()` +
+  `currentColors()` — one source of truth for the per-state palette), extracts the RGBA, and
+  hands it to Rust (`set_tray_image`), which sets it as the `TrayIcon` image. Only pushed when
+  a signature (states + colors + condense) changes — same "update on change only" discipline as
+  the DOM reconciler. A **condense** sub-option draws a single summary dot for the most-urgent
+  state (`error > blocked > done > running > idle`).
+- **Click the item → the same panel drops down as a popover** below it (`toggle_popover`
+  positions the window under the click point and `show()`s it; a light-click or a second tray
+  click hides it). Because it's the *same* NSPanel, per-light focus/hover/badges all work
+  unchanged.
+- **Toggle in the settings panel** (`Mode: Floating | Menu bar`), `localStorage`-persisted
+  (`claudestatus.mode`, `claudestatus.menubarcondense`) — same app-local pattern as every other
+  display pref; no hook/schema change.
+
+**Menu-bar mode forces horizontal** (`effectiveOrientation()`): a vertical column hanging off
+the menu bar looks wrong, so the saved orientation is overridden to horizontal while in
+menu-bar mode (and restored on return to floating); the Orientation control is hidden there.
+
+**Two macOS gotchas found live (both fixed):**
+1. **Tray ops must run on the main thread.** Tauri commands run on a background thread;
+   `tray.set_visible`/`set_icon` from `set_mode`/`set_tray_image` silently no-op'd off-main
+   (while `win.hide()`, which Tauri marshals internally, still fired — so the panel vanished
+   and no tray appeared). Fix: wrap tray calls in `app.run_on_main_thread(...)`. Also: hide the
+   panel *only* when a tray actually exists, so a tray failure can never strand the user with
+   no UI.
+2. **The icon renders as a black silhouette unless forced non-template.** A template
+   `NSStatusItem` image is drawn as a monochrome alpha mask (opaque → black/white), swallowing
+   the dot colors. The builder's `icon_as_template(false)` doesn't survive `set_icon`, so
+   `set_icon_as_template(false)` is re-asserted on every image.
+
+**Known limits (documented, not bugs):**
+- **The menu bar auto-hides in full-screen apps**, so in menu-bar mode the lights are hidden
+  while the user is in full-screen VS Code — exactly the case #008's floating panel exists to
+  cover. This is why it's a per-situation toggle, not a replacement: floating for
+  over-full-screen glance, menu bar for a tidy always-there presence otherwise.
+- **Can't force the item rightmost.** macOS reserves the right edge for system items and lets
+  the user ⌘-drag third-party items (position persisted by the OS). No public API pins it, so
+  the item can land near the notch; ⌘-drag once is the supported "pin." An `autosaveName` route
+  exists but needs native `NSStatusItem` access the `tray-icon` layer doesn't expose — deferred.
+- Popover **auto-dismiss on click-elsewhere** and an **animated pulse in the tray image** for
+  blocked/error are deferred (v1 tray dots are static; attention still reads via color).
+
+**Scope.** `app/src-tauri/src/lib.rs` (tray built in `setup`, `set_mode` + `set_tray_image`
+commands, `toggle_popover`, main-thread marshaling), `app/src-tauri/Cargo.toml` (`tray-icon`
+feature), `app/src/main.js` (mode/condense prefs, `drawTray`/`pushTrayImage`,
+`effectiveOrientation`, mode-gated anchor/resize), `index.html` + `styles.css` (Mode/Condense
+rows). No hook, status-file schema, or event-mapping change.
+
+**Validation.** Rust `cargo check` clean; frontend parses. Live (dev build): tray builds,
+`set_tray_image` fires (confirmed via logs), the two macOS gotchas above were found and fixed
+by observation. Shipped via `install.sh` (release build, single-instance). **Left to verify
+with the user:** the colored dots are visible/findable in their menu bar (subject to the notch),
+the popover opens horizontally, and click-to-focus works from it.

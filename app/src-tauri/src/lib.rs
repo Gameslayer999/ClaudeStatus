@@ -5,8 +5,15 @@
 use serde::Serialize;
 use std::path::PathBuf;
 use tauri::Manager;
+#[cfg(target_os = "macos")]
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
 mod install;
+
+/// Tray icon id — used to fetch the tray (`app.tray_by_id`) from the mode/image
+/// commands after it's built in `setup`.
+#[cfg(target_os = "macos")]
+const TRAY_ID: &str = "claudestatus";
 
 #[derive(Serialize)]
 struct SessionStatus {
@@ -294,6 +301,88 @@ fn focus_session(cwd: String, ide: String, session_id: String) {
     }
 }
 
+/// Switch the bar between its two presentations (decision 024). Floating = the
+/// always-visible NSPanel (default); menu-bar = a tray item that shows the lights as
+/// a generated image (`set_tray_image`) and reveals the panel as a popover on click.
+/// The frontend owns the persisted preference (`localStorage`) and calls this on load
+/// and on toggle; here we only flip the tray's visibility and hide/show the panel.
+#[tauri::command]
+fn set_mode(app: tauri::AppHandle, mode: String) {
+    #[cfg(target_os = "macos")]
+    {
+        let menubar = mode == "menubar";
+        let app2 = app.clone();
+        // NSStatusItem must be manipulated on the main thread; Tauri commands run on a
+        // background thread, so marshal there. Window show/hide is marshaled by Tauri
+        // internally, but we do it here too so it stays ordered with the tray change.
+        let _ = app.run_on_main_thread(move || {
+            let has_tray = match app2.tray_by_id(TRAY_ID) {
+                Some(tray) => {
+                    let _ = tray.set_visible(menubar);
+                    true
+                }
+                None => false,
+            };
+            if let Some(win) = app2.get_webview_window("main") {
+                // Hide the panel only when there's actually a tray to represent it —
+                // otherwise keep it visible so a tray failure never strands the user
+                // with no UI at all.
+                if menubar && has_tray {
+                    let _ = win.hide();
+                } else {
+                    let _ = win.show();
+                }
+            }
+        });
+    }
+}
+
+/// Paint the tray icon from RGBA pixels the webview rendered (the row of colored dots,
+/// or a single summary dot when condensed). Reusing the webview's canvas keeps one
+/// source of truth for the per-state colors (decision 017) instead of redrawing them
+/// in Rust. Called only in menu-bar mode, and only when the image actually changed
+/// (the frontend signature-skips unchanged frames), so this is cheap at the 1 Hz poll.
+#[tauri::command]
+fn set_tray_image(app: tauri::AppHandle, rgba: Vec<u8>, width: u32, height: u32) {
+    #[cfg(target_os = "macos")]
+    {
+        if width == 0 || height == 0 || rgba.len() != (width as usize) * (height as usize) * 4 {
+            return;
+        }
+        let app2 = app.clone();
+        // set_icon touches the NSStatusItem → main thread only (see set_mode).
+        let _ = app.run_on_main_thread(move || {
+            if let Some(tray) = app2.tray_by_id(TRAY_ID) {
+                let img = tauri::image::Image::new_owned(rgba, width, height);
+                let _ = tray.set_icon(Some(img));
+                // Force color rendering: a template icon is drawn as a monochrome
+                // alpha mask (all opaque pixels → black/white), which swallows our
+                // per-state colors. The builder flag doesn't survive set_icon, so
+                // re-assert it on every image.
+                let _ = tray.set_icon_as_template(false);
+            }
+        });
+    }
+}
+
+/// Toggle the panel as a popover anchored under the tray icon. A left-click on the
+/// tray item shows the panel centered below the click point (just under the menu bar);
+/// a second click hides it. The panel keeps its NSPanel properties across hide/show, so
+/// per-light click, hover, and badges work exactly as in floating mode. `cx`/`cy` are
+/// the click's physical screen coordinates (the cursor sits in the menu bar on click).
+#[cfg(target_os = "macos")]
+fn toggle_popover(win: &tauri::WebviewWindow, cx: f64, cy: f64) {
+    if matches!(win.is_visible(), Ok(true)) {
+        let _ = win.hide();
+        return;
+    }
+    let win_w = win.outer_size().map(|s| s.width as f64).unwrap_or(0.0);
+    let x = (cx - win_w / 2.0).max(0.0);
+    let y = cy + 8.0; // just below the menu bar the cursor is in
+    let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
+    let _ = win.show();
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let mut builder = tauri::Builder::default();
@@ -319,11 +408,49 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_nspanel::init())
-        .invoke_handler(tauri::generate_handler![list_sessions, focus_session])
+        .invoke_handler(tauri::generate_handler![
+            list_sessions,
+            focus_session,
+            set_mode,
+            set_tray_image
+        ])
         .setup(|app| {
             // Accessory (agent) app: no Dock icon, not space-managed.
             #[cfg(target_os = "macos")]
             let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            // Menu-bar tray item (decision 024). Built once here (on the main thread)
+            // but hidden until the frontend switches to menu-bar mode via `set_mode`.
+            // Colored (not template) so the status dots show in color; left-click is
+            // handled by us (popover), not a menu. Placeholder icon until the webview
+            // pushes the first dot image.
+            #[cfg(target_os = "macos")]
+            {
+                let mut tb = TrayIconBuilder::with_id(TRAY_ID)
+                    .icon_as_template(false)
+                    .show_menu_on_left_click(false)
+                    .on_tray_icon_event(|tray, event| {
+                        if let TrayIconEvent::Click {
+                            button: MouseButton::Left,
+                            button_state: MouseButtonState::Up,
+                            position,
+                            ..
+                        } = event
+                        {
+                            if let Some(win) = tray.app_handle().get_webview_window("main") {
+                                toggle_popover(&win, position.x, position.y);
+                            }
+                        }
+                    });
+                if let Some(icon) = app.default_window_icon().cloned() {
+                    tb = tb.icon(icon);
+                }
+                match tb.build(app) {
+                    Ok(tray) => {
+                        let _ = tray.set_visible(false);
+                    }
+                    Err(e) => eprintln!("[claudestatus] tray build failed: {e}"),
+                }
+            }
             // Packaged app self-installs its hooks. In dev we keep the repo hooks
             // (via `node hooks/setup.mjs`) so hook edits are live without a rebuild.
             #[cfg(not(debug_assertions))]

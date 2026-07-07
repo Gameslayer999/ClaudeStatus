@@ -50,7 +50,7 @@ project label, and a timestamp. No prompt or transcript content is read or store
 
 **Requirements:** macOS on Apple Silicon (M1 or later), and Claude Code and/or Cursor.
 
-1. Download **`ClaudeStatus_0.1.0_aarch64.dmg`** from the
+1. Download **`ClaudeStatus_0.2.0_aarch64.dmg`** from the
    [latest release](https://github.com/Gameslayer999/ClaudeStatus/releases/latest).
 2. Open the DMG and drag **ClaudeStatus** into **Applications**.
 3. The app is **unsigned**, so macOS Gatekeeper blocks it on first launch. Clear the

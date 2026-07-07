@@ -176,6 +176,43 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 
 ## Recently completed
 
+- **2026-07-07** — **Released v0.2.0.** Cut the second GitHub Release (follows the decision-024
+  unsigned Apple-Silicon DMG pattern): bumped `0.1.0 → 0.2.0` (`tauri.conf.json`, `Cargo.toml`,
+  `package.json`, README DMG name), rebuilt `ClaudeStatus_0.2.0_aarch64.dmg` via `install.sh`,
+  merged `development → main`, tagged `v0.2.0`, and published the release with the DMG. Headline
+  features over v0.1.0: **menu-bar mode** (decision 026) and the **sort** toggle (decision 025).
+- **2026-07-06** — **Menu-bar mode: floating ↔ macOS menu bar toggle (decision 026).** The bar
+  can now run in the **macOS menu bar** as well as floating. A `tray-icon` `NSStatusItem` shows
+  the lights as an **image the webview renders** each poll (offscreen `<canvas>` reusing
+  `displayState()`/`currentColors()` → RGBA → Rust `set_tray_image`, pushed only when a
+  states+colors+condense signature changes), with a **Condense** option that draws one summary dot
+  (`error>blocked>done>running>idle`). Clicking the item drops the *same* NSPanel down as a
+  **popover** (`toggle_popover`), so per-light tab-focus (#019), hover, and badges work unchanged.
+  Toggle is a **Mode** segmented control in the settings panel (`localStorage`
+  `claudestatus.mode`/`.menubarcondense`); menu-bar mode **forces horizontal** (a vertical popover
+  off the bar looks wrong) and hides the Orientation control. Amends decision 003 (menu bar is now
+  an optional mode). Two macOS gotchas found + fixed live: **tray ops must run on the main thread**
+  (`run_on_main_thread`; off-main they silently no-op'd, so the panel hid with no tray — plus a
+  fallback that never hides the panel when the tray is absent), and the **icon must be forced
+  non-template** (`set_icon_as_template(false)` re-asserted per image, else macOS draws it as a
+  black alpha-mask silhouette, swallowing the colors). Touches `app/src-tauri/src/lib.rs`,
+  `app/src-tauri/Cargo.toml` (`tray-icon` feature), `app/src/main.js`, `index.html`, `styles.css`.
+  Shipped via `install.sh` (release, single-instance; auto-restarted). **Known limits:** the menu
+  bar auto-hides in full-screen apps (so floating still owns the over-full-screen case — it's a
+  per-situation toggle, not a replacement); can't force the item rightmost (macOS reserves the
+  right edge; ⌘-drag once to pin it out from under the notch). **Left to verify with the user:**
+  colored dots visible/findable in the menu bar, popover opens horizontal, click-to-focus from it.
+- **2026-07-06** — **Settings: light sort toggle (decision 025).** Added a **Sort** segmented
+  control to the settings panel: **Window** (default — group sessions by their workspace folder,
+  sorting by full `cwd` path so subfolders cluster with their root and same-basename windows stay
+  distinct) vs **Urgency** (attention states first — `error → blocked → done → running → idle`).
+  Answers "sort by what window a session is in"; since hooks expose no true per-window id
+  (decision 006), a window is proxied by `cwd` and two windows on the *same* folder merge (user
+  accepted this limit). Frontend-only: sorting moved into `tick()`, persisted in `localStorage`
+  (`claudestatus.sort`), same pattern as orientation — no hook/schema change. Touches
+  `app/src/index.html`, `app/src/main.js`. Rebuilt + reinstalled via `install.sh`. **Left to
+  verify (live):** open the panel, toggle Window/Urgency, confirm the lights reorder (and, with
+  ≥2 sessions in one folder + others elsewhere, that same-folder lights sit adjacent).
 - **2026-07-06** — **First public release v0.1.0 (decision 024).** Cut the first GitHub
   Release. Committed the pending decision-023 work, rebuilt a fresh
   `ClaudeStatus_0.1.0_aarch64.dmg` (Apple-Silicon-only, unsigned) from the tagged commit,

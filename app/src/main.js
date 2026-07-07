@@ -29,10 +29,76 @@ let emptyEl = null;
 // survive restarts without touching the hook-written status files). Right-clicking
 // the bar toggles the settings panel.
 const ORIENT_KEY = "claudestatus.orientation"; // "horizontal" | "vertical"
+const SORT_KEY = "claudestatus.sort"; // "window" | "urgency"
 const POS_KEY = "claudestatus.pos"; // last #lights screen anchor {x,y,scale} (physical px), restored on launch
+
+// Light ordering (app-local display pref, like orientation). "window" groups
+// sessions that live in the same IDE window together; "urgency" surfaces the
+// attention states first. Hooks expose no true per-window id (decision 006), so a
+// window is proxied by its workspace folder (the session `cwd`). Sorting by the full
+// cwd path clusters a workspace root with any subfolder a session `cd`'d into, and
+// two windows on the SAME folder merge into one group — the accepted signal-layer
+// limit, not a sort bug.
+function currentSort() {
+  return localStorage.getItem(SORT_KEY) === "urgency" ? "urgency" : "window";
+}
+
+// Most-urgent first (UI Principle #2). Uses the rendered displayState so a finished
+// "done" turn clusters correctly, not the raw idle state.
+const URGENCY_RANK = { error: 0, blocked: 1, done: 2, running: 3, idle: 4 };
+
+// Group sessions by window: full cwd path (so subfolders sit next to their root),
+// then id as a stable tiebreaker so same-window lights don't reshuffle each poll.
+function byWindow(a, b) {
+  const c = (a.cwd || "").localeCompare(b.cwd || "");
+  if (c) return c;
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
+// Return a new, ordered array for the current sort mode. In urgency mode a light
+// only moves when its own state changes; within a state it stays window-grouped.
+function sortSessions(sessions) {
+  const arr = sessions.slice();
+  if (currentSort() === "urgency") {
+    arr.sort((a, b) => {
+      const r = (URGENCY_RANK[displayState(a)] ?? 9) - (URGENCY_RANK[displayState(b)] ?? 9);
+      return r || byWindow(a, b);
+    });
+  } else {
+    arr.sort(byWindow);
+  }
+  return arr;
+}
+
+function applySortButtons(mode) {
+  for (const btn of document.querySelectorAll("#sort-seg button")) {
+    btn.classList.toggle("active", btn.dataset.sort === mode);
+  }
+}
+
+// Persist the choice and re-order immediately from the latest poll, so the bar (and
+// the menu-bar tray) reflow without waiting for the next tick.
+function setSort(mode) {
+  localStorage.setItem(SORT_KEY, mode);
+  applySortButtons(mode);
+  latestSessions = sortSessions(latestSessions);
+  render(latestSessions);
+  if (currentMode() === "menubar") {
+    lastTraySig = null;
+    pushTrayImage();
+  }
+}
 
 function currentOrientation() {
   return localStorage.getItem(ORIENT_KEY) === "vertical" ? "vertical" : "horizontal";
+}
+
+// Menu-bar mode always renders horizontally to match the menu bar (a vertical popover
+// hanging off the bar looks wrong); the user's saved orientation is restored when they
+// switch back to floating. Everything that lays out the lights uses this, not the raw
+// saved pref.
+function effectiveOrientation() {
+  return currentMode() === "menubar" ? "horizontal" : currentOrientation();
 }
 
 // Lay the lights out as a row or a column and highlight the matching toggle. The
@@ -48,7 +114,164 @@ function applyOrientation(orient) {
 
 function setOrientation(orient) {
   localStorage.setItem(ORIENT_KEY, orient);
-  applyOrientation(orient);
+  applyOrientation(effectiveOrientation());
+}
+
+// ── Presentation mode: floating vs. macOS menu bar (decision 024) ───────────
+// Floating = the always-visible NSPanel (current behavior). Menu-bar = a tray
+// item showing the lights as a generated image; clicking it reveals this same
+// panel as a popover under the menu bar. The mode + the condense sub-option are
+// app-local display prefs, same localStorage pattern as orientation/size.
+const MODE_KEY = "claudestatus.mode"; // "floating" | "menubar"
+const CONDENSE_KEY = "claudestatus.menubarcondense"; // "true" | "false"
+
+function currentMode() {
+  return localStorage.getItem(MODE_KEY) === "menubar" ? "menubar" : "floating";
+}
+
+function currentCondense() {
+  return localStorage.getItem(CONDENSE_KEY) === "true";
+}
+
+// Visual-only: highlight the active Mode button and show the Condense row only in
+// menu-bar mode (it's meaningless when floating). No backend call — used on first
+// paint before the backend is ready.
+function applyModeButtons(mode) {
+  for (const btn of document.querySelectorAll("#mode-seg button")) {
+    btn.classList.toggle("active", btn.dataset.mode === mode);
+  }
+  const crow = document.getElementById("condense-row");
+  if (crow) crow.hidden = mode !== "menubar";
+  // Orientation is forced horizontal in menu-bar mode, so hide its control there.
+  const orow = document.getElementById("orient-row");
+  if (orow) orow.hidden = mode === "menubar";
+}
+
+function applyCondenseButtons() {
+  const on = currentCondense();
+  for (const btn of document.querySelectorAll("#condense-seg button")) {
+    btn.classList.toggle("active", (btn.dataset.condense === "true") === on);
+  }
+}
+
+// Apply a mode for real: flip the tray + panel visibility in the backend, then do
+// the mode-specific frontend work — floating re-anchors the panel to the saved
+// position; menu-bar paints the tray from the latest sessions.
+async function applyMode(mode) {
+  applyModeButtons(mode);
+  applyOrientation(effectiveOrientation()); // menu-bar forces horizontal; floating restores the saved pref
+  try {
+    await invoke("set_mode", { mode });
+  } catch (_) {
+    /* backend not ready yet; the next toggle / load will retry */
+  }
+  if (mode === "menubar") {
+    lastTraySig = null; // force a repaint
+    await pushTrayImage();
+  } else {
+    await restoreAnchor();
+  }
+}
+
+function setMode(mode) {
+  localStorage.setItem(MODE_KEY, mode);
+  applyMode(mode);
+}
+
+function setCondense(on) {
+  localStorage.setItem(CONDENSE_KEY, String(on));
+  applyCondenseButtons();
+  lastTraySig = null; // shape changed → repaint the tray
+  pushTrayImage();
+}
+
+// ── Menu-bar tray image ─────────────────────────────────────────────────────
+// The webview draws the dots to an offscreen canvas and hands the pixels to Rust,
+// which sets them as the tray icon — reusing displayState()/currentColors() so the
+// menu bar honors the exact same per-state colors as the bar. We only push when the
+// image actually changed (signature), matching the DOM reconciler's "update on
+// change only" discipline.
+let trayCanvas = null;
+let lastTraySig = null;
+let latestSessions = []; // most recent poll, so a pref change can repaint the tray
+
+// Condense picks the single most-urgent state to show (UI Principle #2 — surface
+// what needs the user first).
+const TRAY_PRIORITY = ["error", "blocked", "done", "running", "idle"];
+
+function summaryState(states) {
+  for (const p of TRAY_PRIORITY) if (states.includes(p)) return p;
+  return "empty";
+}
+
+// Draw the dot row (or a single condensed dot) and return RGBA pixels + dims.
+// Rendered at ~2× the menu-bar height so it's crisp on retina; macOS scales the
+// image down to the bar height, preserving aspect.
+function drawTray(states, colors, condense) {
+  const H = 44;
+  const D = 22; // dot diameter
+  const R = D / 2;
+  const G = 12; // gap between dots
+  const P = 6; // horizontal padding
+  let list;
+  if (condense) list = [summaryState(states)];
+  else if (states.length === 0) list = ["empty"];
+  else list = states;
+  const N = list.length;
+  const W = Math.max(D + P * 2, P * 2 + N * D + (N - 1) * G);
+  if (!trayCanvas) trayCanvas = document.createElement("canvas");
+  const cv = trayCanvas;
+  cv.width = W;
+  cv.height = H;
+  const ctx = cv.getContext("2d");
+  ctx.clearRect(0, 0, W, H);
+  list.forEach((st, i) => {
+    const cx = P + R + i * (D + G);
+    const cy = H / 2;
+    let fill = colors[st] || colors.idle;
+    let alpha = 1;
+    if (st === "empty") {
+      fill = "#ffffff";
+      alpha = 0.28;
+    } else if (st === "idle") {
+      alpha = 0.55; // dim acknowledged/dormant sessions, like the bar
+    }
+    ctx.globalAlpha = alpha;
+    ctx.beginPath();
+    ctx.arc(cx, cy, R, 0, Math.PI * 2);
+    ctx.fillStyle = fill;
+    ctx.fill();
+  });
+  ctx.globalAlpha = 1;
+  const data = ctx.getImageData(0, 0, W, H).data;
+  return { rgba: Array.from(data), width: W, height: H };
+}
+
+// Build the tray image from the latest poll and push it to Rust if it changed.
+async function pushTrayImage() {
+  if (currentMode() !== "menubar") return;
+  const colors = currentColors();
+  const condense = currentCondense();
+  const states = latestSessions.map(displayState);
+  const sig = JSON.stringify([states, colors, condense]);
+  if (sig === lastTraySig) return;
+  lastTraySig = sig;
+  const img = drawTray(states, colors, condense);
+  try {
+    await invoke("set_tray_image", { rgba: img.rgba, width: img.width, height: img.height });
+  } catch (_) {
+    /* fail-silent */
+  }
+}
+
+// Hide the popover (menu-bar mode) — used after clicking a light. A subsequent tray
+// click re-shows it (Rust toggles on is_visible).
+function hidePopover() {
+  try {
+    appWindow.hide();
+  } catch (_) {
+    /* fail-silent */
+  }
 }
 
 // Light size + per-state colors — the other display prefs, same localStorage
@@ -147,12 +370,20 @@ function setColor(state, hex) {
 // "Reset to defaults" clears every display pref (orientation, size, colors).
 function resetPrefs() {
   localStorage.removeItem(ORIENT_KEY);
+  localStorage.removeItem(SORT_KEY);
   localStorage.removeItem(SIZE_KEY);
   localStorage.removeItem(PAD_KEY);
   localStorage.removeItem(OPACITY_KEY);
   localStorage.removeItem(COLORS_KEY);
-  applyOrientation(currentOrientation());
+  localStorage.removeItem(MODE_KEY);
+  localStorage.removeItem(CONDENSE_KEY);
+  applyOrientation(effectiveOrientation());
+  applySortButtons(currentSort());
   applyStyle();
+  applyCondenseButtons();
+  latestSessions = sortSessions(latestSessions);
+  render(latestSessions);
+  applyMode(currentMode()); // back to floating: shows the panel, hides the tray
 }
 
 // Toggle the panel while keeping the lights pinned in place. Anchor to the lights'
@@ -180,8 +411,11 @@ async function toggleSettings() {
 }
 
 function initSettings() {
-  applyOrientation(currentOrientation());
+  applyOrientation(effectiveOrientation());
+  applySortButtons(currentSort());
   applyStyle();
+  applyModeButtons(currentMode()); // visual only; backend mode applied after first tick
+  applyCondenseButtons();
   // Right-click anywhere on the bar (including a dot) toggles the panel; suppress
   // the native context menu.
   document.getElementById("bar").addEventListener("contextmenu", (e) => {
@@ -191,6 +425,18 @@ function initSettings() {
   document.getElementById("orient-seg").addEventListener("click", (e) => {
     const btn = e.target.closest("button[data-orient]");
     if (btn) setOrientation(btn.dataset.orient);
+  });
+  document.getElementById("sort-seg").addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-sort]");
+    if (btn) setSort(btn.dataset.sort);
+  });
+  document.getElementById("mode-seg").addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-mode]");
+    if (btn) setMode(btn.dataset.mode);
+  });
+  document.getElementById("condense-seg").addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-condense]");
+    if (btn) setCondense(btn.dataset.condense === "true");
   });
   document.getElementById("size-range").addEventListener("input", (e) => {
     setSize(parseInt(e.target.value, 10));
@@ -301,6 +547,7 @@ function render(sessions) {
         if (el._updatedAt != null) reviewedAt.set(s.id, el._updatedAt);
         if (el.className === "dot done") el.className = "dot idle"; // instant feedback
         focusSession(el._cwd, el._ide, s.id);
+        if (currentMode() === "menubar") hidePopover(); // dismiss the popover on select
       });
       dots.set(s.id, el);
       sizeChanged = true;
@@ -348,6 +595,11 @@ function render(sessions) {
 
 async function resizeToContent() {
   if (!AUTO_RESIZE || !LogicalSize) return;
+  // Skip while the panel is hidden (menu-bar mode, popover closed): the webview
+  // pauses requestAnimationFrame when off-screen, so the double-rAF below would
+  // never resolve. The visibilitychange handler re-runs this when the popover
+  // reappears, so the panel sizes correctly on open.
+  if (document.hidden) return;
   // Wait for layout+paint so we never measure a 0-width bar (which shrank the
   // window to nothing before the content rendered).
   await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
@@ -490,6 +742,9 @@ let anchorReady = false;
 // On any move: keep the bar on-screen, then (once ready) remember the lights' new
 // screen position so a restart/rebuild reopens them here instead of recentering.
 async function onWindowMoved(pos) {
+  // In menu-bar mode the popover's position is tray-driven, not user-dragged — don't
+  // clamp or persist it (that's a floating-mode concern; decision 022).
+  if (currentMode() === "menubar") return;
   await clampToMonitor(pos);
   if (!anchorReady) return;
   const a = await lightsScreenPos();
@@ -584,8 +839,10 @@ async function focusSession(cwd, ide, id) {
 
 async function tick() {
   try {
-    const sessions = await invoke("list_sessions");
+    const sessions = sortSessions(await invoke("list_sessions"));
+    latestSessions = sessions;
     render(sessions);
+    if (currentMode() === "menubar") await pushTrayImage();
   } catch (_) {
     /* backend not ready yet; try again next tick */
   }
@@ -599,8 +856,16 @@ window.addEventListener("DOMContentLoaded", async () => {
   if (appWindow.onMoved) {
     appWindow.onMoved(({ payload }) => onWindowMoved(payload));
   }
+  // The webview pauses rAF while the panel is hidden; when the menu-bar popover
+  // reappears, re-run the resize so it sizes to the current dots on open.
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && currentMode() === "menubar") resizeToContent();
+  });
   await tick(); // first render, so the bar has its real size before we anchor it
-  await restoreAnchor(); // put the lights back where the user left them
   anchorReady = true;
+  // Apply the saved presentation mode: floating restores the anchor and shows the
+  // panel; menu-bar hides the panel and paints the tray. (Menu-bar skips the anchor
+  // restore — the popover is positioned by the tray, not the saved floating spot.)
+  await applyMode(currentMode());
   setInterval(tick, POLL_MS);
 });

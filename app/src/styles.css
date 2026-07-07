@@ -189,6 +189,12 @@ body {
   justify-content: space-between;
   gap: 12px;
 }
+/* Same specificity fight as #settings[hidden]: `#settings .row` sets display:flex,
+   which would beat the UA [hidden]{display:none}. This wins it back so the Condense
+   row stays hidden outside menu-bar mode. */
+#settings .row[hidden] {
+  display: none;
+}
 #settings .row-label {
   white-space: nowrap;
 }

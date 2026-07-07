@@ -13,10 +13,31 @@
       <div id="settings" hidden>
         <div class="sep"></div>
         <div class="row">
+          <span class="row-label">Mode</span>
+          <div class="seg" id="mode-seg">
+            <button type="button" data-mode="floating">Floating</button>
+            <button type="button" data-mode="menubar">Menu bar</button>
+          </div>
+        </div>
+        <div class="row" id="condense-row" hidden>
+          <span class="row-label">Menu bar</span>
+          <div class="seg" id="condense-seg">
+            <button type="button" data-condense="false">Dots</button>
+            <button type="button" data-condense="true">Single</button>
+          </div>
+        </div>
+        <div class="row" id="orient-row">
           <span class="row-label">Orientation</span>
           <div class="seg" id="orient-seg">
             <button type="button" data-orient="horizontal">Horizontal</button>
             <button type="button" data-orient="vertical">Vertical</button>
+          </div>
+        </div>
+        <div class="row">
+          <span class="row-label">Sort</span>
+          <div class="seg" id="sort-seg">
+            <button type="button" data-sort="window">Window</button>
+            <button type="button" data-sort="urgency">Urgency</button>
           </div>
         </div>
         <div class="row">
