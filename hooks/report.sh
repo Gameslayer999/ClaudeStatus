@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ClaudeStatus — the real signal hook.
 #
-# Maps one Claude Code hook event to a session state (and a short "what it's
+# Maps one Claude Code/Codex hook event to a session state (and a short "what it's
 # working on" description) and records it in a per-session status file:
 # $CLAUDESTATUS_DIR/sessions/<session_id>.json (default ~/.claude/status/sessions/).
 # One file per session → concurrent sessions never contend (decision 007).
@@ -13,7 +13,8 @@
 # programmatic/headless Claude calls (e.g. an app classifying text) that shouldn't
 # appear as lights. Set it in the environment where you spawn Claude (decision 013).
 #
-# Contract (Claude Code 2.1.201 — DECISIONS.md #006; Cursor 3.10.11 — #018):
+# Contract (Claude Code 2.1.201 — DECISIONS.md #006; Cursor 3.10.11 — #018;
+# Codex hooks — official manual fetched 2026-07-09):
 #   running  <- UserPromptSubmit | PreToolUse | PostToolUse
 #   blocked  <- PermissionRequest  (Claude only; Cursor has no such event)
 #   idle     <- Stop | SessionStart
@@ -27,6 +28,10 @@
 # bridge; a per-payload `ide` field ("cursor" when .cursor_version is present, else
 # "vscode") drives click-to-focus. Cursor sends the workspace in .workspace_roots[]
 # (not .cwd) and uses camelCase event names (normalized below).
+#
+# Codex support: the same hook shape is installed into ~/.codex/hooks.json. Codex
+# command hooks run with the session cwd as their working directory, so cwd falls
+# back to $PWD, and the session id accepts Codex thread/conversation id fields.
 #
 # MUST be fast, non-blocking, and fail-silent (Agent Guideline #3): never write
 # to stdout, never exit non-zero, swallow every error. Invoked as:
@@ -55,7 +60,7 @@ esac
   payload="$(cat)"
   # Opt-out for programmatic/headless sessions (decision 013).
   [ -n "$CLAUDESTATUS_IGNORE" ] && exit 0
-  sid="$(printf '%s' "$payload" | jq -r '.session_id // empty' 2>/dev/null)"
+  sid="$(printf '%s' "$payload" | jq -r '.session_id // .thread_id // .threadId // .conversation_id // .conversationId // .thread.id // .conversation.id // empty' 2>/dev/null)"
   [ -z "$sid" ] && exit 0
   # Cursor fires sessionStart for an unopened "draft" composer — skip that phantom.
   [ "$sid" = "empty-state-draft" ] && exit 0
@@ -109,15 +114,21 @@ esac
          "PermissionRequest":"blocked", "Stop":"idle", "SessionStart":"idle",
          "StopFailure":"error" }[$event]) as $base
     | ($p.cursor_version != null) as $isCursor
+    | (($p.source // $p.app // $p.client // $p.surface // "") | tostring | test("codex"; "i")) as $payloadCodex
+    | (($p.session_id // "") == "" and (($p.thread_id // $p.threadId // $p.conversation_id // $p.conversationId // $p.thread.id // $p.conversation.id // "") != "")) as $idLooksCodex
+    | (($p.cwd // "") == "" and (env.PWD // "") != "") as $cwdLooksCodex
+    | ($payloadCodex or $idLooksCodex or $cwdLooksCodex) as $isCodex
     | (($p.status // "") | test("error|fail|abort|cancel"; "i")) as $failedStop
     | (if $event == "Stop" and $failedStop then "error" else $base end) as $state
     | select($state != null)
     # Cursor puts the workspace in workspace_roots[]; a tool-level .cwd (e.g. /tmp) is
     # the exec dir of that tool call, not the session folder — prefer workspace_roots.
-    | (if $isCursor then (($p.workspace_roots // [])[0] // $old.cwd) else ($p.cwd // $old.cwd) end // "") as $cwd
-    | (if $isCursor then "cursor" else ($old.ide // "vscode") end) as $ide
-    | ($p.tool_name // "") as $tool
-    | (if $event == "UserPromptSubmit" then ($p.prompt | trunc(160)) else ($old.task // "") end) as $task
+    | (if $isCursor then (($p.workspace_roots // [])[0] // $old.cwd)
+       elif $isCodex then ($p.cwd // $old.cwd // env.PWD)
+       else ($p.cwd // $old.cwd) end // "") as $cwd
+    | (if $isCursor then "cursor" elif $isCodex then "codex" else ($old.ide // "vscode") end) as $ide
+    | ($p.tool_name // $p.toolName // $p.tool // "") as $tool
+    | (if $event == "UserPromptSubmit" then (($p.prompt // $p.user_prompt // $p.input // $p.text) | trunc(160)) else ($old.task // "") end) as $task
     | (if $event == "PreToolUse" then
          (if $tool == "Bash" then "$ " + ($p.tool_input.command | trunc(90))
           elif ($tool | test("^(Edit|Write|Read|NotebookEdit)$")) then
@@ -127,7 +138,7 @@ esac
          (if $tool == "AskUserQuestion" then "⏸ waiting — a question for you"
           else "⏸ waiting — approve " + $tool end)
        elif $event == "Stop" then
-         (if $failedStop then ("⚠ turn failed — " + ($p.status // "")) else (($p.last_assistant_message // "") | trunc(160)) end)
+         (if $failedStop then ("⚠ turn failed — " + ($p.status // "")) else (($p.last_assistant_message // $p.lastAssistantMessage // $p.message // "") | trunc(160)) end)
        elif $event == "StopFailure" then ("⚠ turn failed" + (if ($p.error_type // "") != "" then " — " + $p.error_type else "" end))
        elif $event == "SessionStart" then ""
        else ($old.detail // "") end) as $detail

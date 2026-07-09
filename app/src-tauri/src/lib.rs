@@ -24,7 +24,7 @@ struct SessionStatus {
     updated_at: i64,
     task: String,
     detail: String,
-    /// Host IDE ("cursor" or "vscode"), from the hook — drives click-to-focus.
+    /// Host surface ("cursor", "vscode", or "codex"), from the hook — drives click-to-focus.
     ide: String,
     /// agent_type of each currently-running subagent under this session.
     subagents: Vec<String>,
@@ -88,6 +88,72 @@ fn write_focus_request(session_id: &str) {
     let _ = std::fs::write(dir.join("focus-request.json"), body.to_string());
 }
 
+/// True if process `pid` currently exists. `kill(pid, 0)` delivers no signal — it
+/// only probes: 0 = alive, EPERM = alive but owned by another user, ESRCH = gone.
+#[cfg(target_os = "macos")]
+fn pid_alive(pid: i64) -> bool {
+    if pid <= 0 {
+        return false;
+    }
+    if unsafe { libc::kill(pid as libc::pid_t, 0) } == 0 {
+        return true;
+    }
+    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+/// Workspace folders of every **live** IDE window, from the lock files each IDE
+/// window writes (~/.claude/ide/*.lock — `workspaceFolders` + owning `pid`). A lock
+/// whose pid is dead is skipped, so a force-quit/crashed IDE that left its lock behind
+/// stops keeping its sessions lit (decision 027). Returns empty when the ide dir is
+/// missing/unreadable — callers read that as "no liveness signal" and fall back to the
+/// idle timeout, so we never prune every light off one bad read or a no-IDE machine.
+#[cfg(target_os = "macos")]
+fn live_workspace_folders() -> Vec<String> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let ide_dir = std::path::PathBuf::from(home).join(".claude").join("ide");
+    let mut folders = Vec::new();
+    let Ok(entries) = std::fs::read_dir(&ide_dir) else {
+        return folders;
+    };
+    for e in entries.flatten() {
+        let p = e.path();
+        if p.extension().and_then(|s| s.to_str()) != Some("lock") {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&p) else { continue };
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { continue };
+        if let Some(pid) = v.get("pid").and_then(|x| x.as_i64()) {
+            if !pid_alive(pid) {
+                continue;
+            }
+        }
+        if let Some(arr) = v.get("workspaceFolders").and_then(|x| x.as_array()) {
+            for f in arr.iter().filter_map(|x| x.as_str()) {
+                folders.push(f.to_string());
+            }
+        }
+    }
+    folders
+}
+
+/// Non-macOS builds have no IDE-lock liveness signal; the idle timeout alone prunes.
+#[cfg(not(target_os = "macos"))]
+fn live_workspace_folders() -> Vec<String> {
+    Vec::new()
+}
+
+/// True if `cwd` sits inside one of the live IDE workspace folders — an exact match,
+/// or a subfolder a session `cd`'d into (same prefix rule as `workspace_root`). An
+/// empty cwd matches nothing: it's an anonymous session no live window claims.
+fn cwd_is_live(cwd: &str, folders: &[String]) -> bool {
+    if cwd.is_empty() {
+        return false;
+    }
+    folders
+        .iter()
+        .any(|f| cwd == f || cwd.starts_with(&format!("{f}/")))
+}
+
 /// agent_type of each currently-running subagent, read from the per-session
 /// marker directory sessions/<id>.subagents/ (one file per subagent — race-free
 /// under parallel subagents; decision 010).
@@ -108,6 +174,11 @@ fn list_sessions() -> Vec<SessionStatus> {
     let mut out = Vec::new();
     let now = now_unix();
     let dir = sessions_dir();
+    // Workspace folders of the currently-open IDE windows. A session whose folder
+    // isn't among them has had its window closed (or never had one — an anonymous
+    // ghost), so its light is stale (decision 027). Empty ⇒ no liveness signal, so
+    // lock-pruning is skipped below and only the idle timeout applies.
+    let live_folders = live_workspace_folders();
     let Ok(entries) = std::fs::read_dir(&dir) else {
         return out;
     };
@@ -127,10 +198,19 @@ fn list_sessions() -> Vec<SessionStatus> {
             continue;
         };
         let updated_at = v.get("updated_at").and_then(|x| x.as_i64()).unwrap_or(0);
-        // Prune dead/abandoned ghosts (e.g. sessions that never fired SessionEnd):
-        // delete the file (and its subagent markers) and skip it. Self-heals on
-        // the session's next event.
-        if now - updated_at > MAX_IDLE_SECS {
+        let cwd = v.get("cwd").and_then(|x| x.as_str()).unwrap_or("");
+        // Prune dead sessions (delete the file + subagent markers, skip it; self-heals
+        // on the session's next event) two ways:
+        //   (a) window gone — the session's workspace maps to no live IDE lock, so its
+        //       window was closed / the IDE quit. Instant, no waiting on the timer
+        //       (decision 027). Skipped when no live lock exists at all so one bad read
+        //       (or a no-IDE machine) never nukes every light.
+        //   (b) unclean death with the window still open, or a superseded session
+        //       sharing a live window's lock: silent past MAX_IDLE_SECS (decision 004).
+        let ide = v.get("ide").and_then(|x| x.as_str()).unwrap_or("vscode");
+        let uses_ide_locks = ide == "vscode" || ide == "cursor";
+        let window_gone = uses_ide_locks && !live_folders.is_empty() && !cwd_is_live(cwd, &live_folders);
+        if window_gone || now - updated_at > MAX_IDLE_SECS {
             let _ = std::fs::remove_file(&path);
             let _ = std::fs::remove_dir_all(dir.join(format!("{id}.subagents")));
             continue;
@@ -139,12 +219,12 @@ fn list_sessions() -> Vec<SessionStatus> {
         out.push(SessionStatus {
             id,
             state: v.get("state").and_then(|x| x.as_str()).unwrap_or("idle").to_string(),
-            cwd: v.get("cwd").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+            cwd: cwd.to_string(),
             label: v.get("label").and_then(|x| x.as_str()).unwrap_or("").to_string(),
             updated_at,
             task: v.get("task").and_then(|x| x.as_str()).unwrap_or("").to_string(),
             detail: v.get("detail").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-            ide: v.get("ide").and_then(|x| x.as_str()).unwrap_or("vscode").to_string(),
+            ide: ide.to_string(),
             subagents,
         });
     }
@@ -233,7 +313,13 @@ fn raise_window_fast(root: &str, ide: &str) {
     if name.is_empty() {
         return;
     }
-    let proc = if ide == "cursor" { "Cursor" } else { "Code" };
+    let proc = if ide == "cursor" {
+        "Cursor"
+    } else if ide == "codex" {
+        "Codex"
+    } else {
+        "Code"
+    };
     // Escape for an AppleScript double-quoted string literal.
     let esc = name.replace('\\', "\\\\").replace('"', "\\\"");
     let script = format!(
@@ -271,6 +357,10 @@ fn focus_session(cwd: String, ide: String, session_id: String) {
     write_focus_request(&session_id);
     #[cfg(target_os = "macos")]
     {
+        if ide == "codex" {
+            let _ = std::process::Command::new("open").args(["-a", "Codex"]).spawn();
+            return;
+        }
         if cwd.is_empty() {
             return;
         }
@@ -299,6 +389,15 @@ fn focus_session(cwd: String, ide: String, session_id: String) {
                 .spawn();
         }
     }
+}
+
+/// Quit the whole app from the settings panel. As an Accessory app (no Dock icon,
+/// no app menu — see `setup`) the bar has no OS-provided Quit, so this button is the
+/// only in-UI way out. `exit(0)` tears down the panel and tray and ends the process;
+/// the hooks keep writing status files regardless, so relaunching repopulates the bar.
+#[tauri::command]
+fn quit_app(app: tauri::AppHandle) {
+    app.exit(0);
 }
 
 /// Switch the bar between its two presentations (decision 024). Floating = the
@@ -412,7 +511,8 @@ pub fn run() {
             list_sessions,
             focus_session,
             set_mode,
-            set_tray_image
+            set_tray_image,
+            quit_app
         ])
         .setup(|app| {
             // Accessory (agent) app: no Dock icon, not space-managed.

@@ -126,7 +126,8 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
    spawns a new window — decision 016, replaced the `open -a <folder>` that duplicated windows;
    drag handle = pill padding; a fast `osascript` window-raise added for same-Space switches,
    ~0.2s vs the CLI's ~1.1s — decision 021, needs Accessibility, degrades to the CLI without it);
-   dead-session pruning (2h, replaced heartbeat-dimming);
+   dead-session pruning (instant on IDE-window close via the lock files — decision 027 — with a
+   2h idle timer as backstop, replacing heartbeat-dimming);
    **hover tooltip** (task + current activity, native OS tooltip); **subagent count badge**
    (decision 009). Remaining: optional visual polish (pulse on blocked/error is in CSS;
    spacing/size tuning), and confirm the interim error (red) signal from live `StopFailure`
@@ -176,6 +177,31 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 
 ## Recently completed
 
+- **2026-07-09** — **Codex compatibility (decision 029).** ClaudeStatus now installs the shared
+  `report.sh` into Codex user hooks at `~/.codex/hooks.json` as well as Claude's
+  `~/.claude/settings.json`. Codex registration uses only the currently documented Codex hook
+  events, while Claude/Cursor keep their existing fuller event set. The reporter accepts Codex
+  thread/conversation ids, falls back to the hook process cwd, writes `ide:"codex"`, and the app
+  skips IDE-lock pruning for Codex sessions. Clicking a Codex light opens `Codex.app`. Verified
+  against the official Codex manual (fetched 2026-07-09), `bash -n`, `node --check`,
+  `cargo check`, and temp-dir hook smoke tests.
+- **2026-07-07** — **Quit button in settings (decision 028).** The accessory app (no Dock icon,
+  no app menu) now has an in-UI way to quit: a **Quit** button in the settings-panel footer wired
+  to a new `quit_app` Tauri command (`app.exit(0)`), red-tinted on hover. New in
+  `app/src-tauri/src/lib.rs` (`quit_app` command + handler), `app/src/index.html` (`#quit-btn`),
+  `app/src/main.js` (click → `invoke("quit_app")`), `app/src/styles.css` (shared footer style +
+  red hover). `cargo check` clean. **Left:** rebuild + reinstall to exercise it in the packaged app.
+- **2026-07-07** — **Stale-light fix: prune on IDE-window close (decision 027).** Lights no
+  longer linger up to 2h after a session's IDE window is gone. `list_sessions` now builds the set
+  of **live workspace folders** from `~/.claude/ide/*.lock` (skipping locks whose owning `pid` is
+  dead — force-quit/crash) and deletes any session whose `cwd` maps to no live folder (empty `cwd`
+  = anonymous ghost → matches nothing → pruned), instantly. Purely additive: the 2h idle timer
+  (#004) is unchanged and still covers a superseded session sharing a live window's lock. Gated so
+  an empty live-lock set (no-IDE machine / bad read) skips lock-pruning entirely. New in
+  `app/src-tauri/src/lib.rs` (`pid_alive`, `live_workspace_folders`, `cwd_is_live`) + `libc`
+  macOS-target dep. Verified against live state (both empty-`cwd` Cursor ghosts flagged for prune,
+  all real sessions kept). **Left:** rebuild + reinstall the app (running copy predates this), then
+  confirm by closing a window and watching its light vanish within a poll.
 - **2026-07-07** — **Released v0.2.0.** Cut the second GitHub Release (follows the decision-024
   unsigned Apple-Silicon DMG pattern): bumped `0.1.0 → 0.2.0` (`tauri.conf.json`, `Cargo.toml`,
   `package.json`, README DMG name), rebuilt `ClaudeStatus_0.2.0_aarch64.dmg` via `install.sh`,

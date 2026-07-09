@@ -2,8 +2,9 @@
 //
 // On launch the bundled app makes itself work with zero external steps: it writes
 // an embedded copy of the status hook to a stable location and registers it in the
-// user's ~/.claude/settings.json. Idempotent (safe every launch), reversible (a
-// one-time backup), and non-clobbering (only touches its own hook entries).
+// user's Claude and Codex hook configs. Idempotent (safe every launch),
+// reversible (a one-time backup), and non-clobbering (only touches its own hook
+// entries).
 //
 // The hook script is embedded at compile time, so the .app is self-contained and
 // the installed hook always matches the shipped app version. Gated to release
@@ -19,6 +20,14 @@ const SIMPLE_EVENTS: &[&str] = &[
     "SubagentStart", "SubagentStop",
 ];
 const TOOL_EVENTS: &[&str] = &["PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionRequest"];
+const CODEX_SIMPLE_EVENTS: &[&str] = &[
+    "SessionStart",
+    "UserPromptSubmit",
+    "Stop",
+    "SubagentStart",
+    "SubagentStop",
+];
+const CODEX_TOOL_EVENTS: &[&str] = &["PreToolUse", "PostToolUse", "PermissionRequest"];
 
 fn home() -> PathBuf {
     PathBuf::from(std::env::var("HOME").unwrap_or_default())
@@ -26,6 +35,10 @@ fn home() -> PathBuf {
 
 fn claude_dir() -> PathBuf {
     home().join(".claude")
+}
+
+fn codex_dir() -> PathBuf {
+    home().join(".codex")
 }
 
 fn status_dir() -> PathBuf {
@@ -53,17 +66,42 @@ fn try_install() -> std::io::Result<()> {
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))?;
     let script_str = script.to_string_lossy().to_string();
 
-    // 2. Merge our hooks into ~/.claude/settings.json.
-    let settings_path = claude_dir().join("settings.json");
+    // 2. Merge our hooks into Claude and Codex user-level hook config.
+    merge_hooks(
+        claude_dir().join("settings.json"),
+        claude_dir().join("settings.json.claudestatus-bak"),
+        &script_str,
+        SIMPLE_EVENTS,
+        TOOL_EVENTS,
+    )?;
+    merge_hooks(
+        codex_dir().join("hooks.json"),
+        codex_dir().join("hooks.json.claudestatus-bak"),
+        &script_str,
+        CODEX_SIMPLE_EVENTS,
+        CODEX_TOOL_EVENTS,
+    )?;
+
+    Ok(())
+}
+
+fn merge_hooks(
+    settings_path: PathBuf,
+    backup_path: PathBuf,
+    script_str: &str,
+    simple_events: &[&str],
+    tool_events: &[&str],
+) -> std::io::Result<()> {
+    if let Some(parent) = settings_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     let mut settings = if settings_path.exists() {
         let txt = std::fs::read_to_string(&settings_path)?;
-        let bak = claude_dir().join("settings.json.claudestatus-bak");
-        if !bak.exists() {
-            let _ = std::fs::write(&bak, &txt);
+        if !backup_path.exists() {
+            let _ = std::fs::write(&backup_path, &txt);
         }
         serde_json::from_str::<serde_json::Value>(&txt).unwrap_or_else(|_| serde_json::json!({}))
     } else {
-        std::fs::create_dir_all(claude_dir())?;
         serde_json::json!({})
     };
 
@@ -77,10 +115,10 @@ fn try_install() -> std::io::Result<()> {
     }
     let hooks = hooks_val.as_object_mut().unwrap();
 
-    let events = SIMPLE_EVENTS
+    let events = simple_events
         .iter()
         .map(|e| (*e, false))
-        .chain(TOOL_EVENTS.iter().map(|e| (*e, true)));
+        .chain(tool_events.iter().map(|e| (*e, true)));
     for (event, with_matcher) in events {
         let list = hooks
             .entry(event.to_string())

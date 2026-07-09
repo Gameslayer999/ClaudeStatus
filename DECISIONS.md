@@ -36,7 +36,10 @@
 | 023 | 2026-07-06 | Settings: bar **opacity** slider (0–100%) drives a `--bar-opacity` CSS variable on `#bar` that fades the whole pill together — fill, border, shadow, and backdrop-blur (multipliers normalized so 82% reproduces the original look) — while the lights stay fully opaque so the signal never fades; at 0% the pill vanishes and only the lights float. Fading the chrome (not just the fill) makes the control perceptible when the bar is minimized to a few lights. Persisted in `localStorage` as a whole percent, frontend-only, same pattern as decision 017 size/padding | Accepted |
 | 024 | 2026-07-06 | First public release **v0.1.0**: a git tag + GitHub Release with the prebuilt **Apple-Silicon-only, unsigned** `ClaudeStatus_0.1.0_aarch64.dmg` as the primary install path (build-from-source via `install.sh` kept for Intel/devs). Unsigned/unnotarized → users clear quarantine (`xattr -dr com.apple.quarantine`) or "Open Anyway"; README rewritten to lead with the DMG download and macOS-15+ Gatekeeper steps | Accepted |
 | 025 | 2026-07-06 | Settings: light **sort** toggle — **Window** (group sessions by workspace folder, default) vs **Urgency** (attention states first). "Window" is proxied by the session `cwd` (hooks expose no true per-window id — #006), so two windows on the same folder merge (accepted limit). Frontend-only sort in `localStorage` (`claudestatus.sort`), same pattern as orientation | Accepted |
+| 027 | 2026-07-07 | Stale-light fix: prune a session the instant its IDE window is gone, not just after the 2h idle timer. `list_sessions` builds the set of live workspace folders from `~/.claude/ide/*.lock` (skipping locks whose owning `pid` is dead — force-quit/crash), and deletes any session whose `cwd` maps to no live folder (empty cwd = anonymous ghost, matches nothing). Purely additive — the `MAX_IDLE_SECS=2h` backstop (#004) is unchanged and still covers a superseded session sharing a live window's lock. Caveat: a Claude session in a standalone terminal (no IDE lock) is pruned when any IDE is open; skipped entirely when no live lock exists so a no-IDE machine / bad read never nukes every light | Accepted |
+| 028 | 2026-07-07 | Settings: a **Quit** button in the panel footer that calls a new `quit_app` Tauri command (`app.exit(0)`). As an Accessory app (no Dock icon, no app menu) the bar had no in-UI way to quit — only Activity Monitor / `kill`. Red-tinted hover marks it as the one destructive footer action; hooks keep writing status files, so relaunching repopulates the bar | Accepted |
 | 026 | 2026-07-06 | Presentation-mode toggle: the bar runs **floating** (the NSPanel, default) **or in the macOS menu bar** — a `tray-icon` NSStatusItem drawn from a webview-rendered dot image (with a condense-to-single-summary-dot option), clicked to reveal the same panel as a popover below it. Amends #003 (menu bar is now an optional mode, not rejected). Settings-panel toggle, `localStorage`-persisted; menu-bar mode forces horizontal; tray ops marshaled to the main thread; icon forced non-template so the dots keep their colors | Accepted |
+| 029 | 2026-07-09 | Codex compatibility: install the shared `report.sh` into Codex user hooks at `~/.codex/hooks.json` alongside Claude's `~/.claude/settings.json`, using only Codex-supported events from the official Codex Hooks manual. The reporter accepts Codex thread/conversation id fields, falls back to the hook process cwd, tags sessions as `ide:"codex"`, and skips IDE-lock pruning for them; click-to-focus opens `Codex.app` | Accepted |
 
 ---
 
@@ -1163,3 +1166,127 @@ rows). No hook, status-file schema, or event-mapping change.
 by observation. Shipped via `install.sh` (release build, single-instance). **Left to verify
 with the user:** the colored dots are visible/findable in their menu bar (subject to the notch),
 the popover opens horizontally, and click-to-focus works from it.
+
+---
+
+## 027 — Stale-light fix: prune on IDE-window close, not just the 2h idle timer
+
+**Date:** 2026-07-07
+**Status:** Accepted (extends #004's heartbeat staleness — additive, no schema/hook change)
+
+**Context.** Lights sometimes lingered after a session was really gone. The only staleness
+backstops were the clean `SessionEnd` hook (skipped on force-quit / window-close) and the
+`MAX_IDLE_SECS = 2h` idle timer (#004). So a session whose IDE window closed without
+`SessionEnd` kept its light for **up to two hours**. Observed live: two Cursor sessions with
+**empty `cwd`/`label`** (anonymous gray ghosts, idle ~82 min) no window owned, still on the bar.
+The 2h timer is deliberately long because an idle or *blocked* session emits no further hook
+events while it waits — shortening it would kill a session the user is mid-decision on. So the
+timer alone can't be the answer.
+
+**The signal.** `~/.claude/ide/*.lock` — one file per **live IDE window**, each listing its
+`workspaceFolders` and owning `pid`. Already parsed by `workspace_root()` for click-to-focus,
+so the mechanism is proven. When a window closes, its lock disappears; a force-quit leaves the
+lock but the `pid` dies. Every real session's `cwd` maps to a live lock; the two ghosts map to
+none.
+
+**Options considered.**
+| Option | Verdict |
+|---|---|
+| **Lock-liveness + keep 2h backstop** (chosen) | Prune the instant a session's workspace maps to no live lock; keep the 2h timer for the in-window case. Purely additive, no regression. |
+| Lock-liveness + shorten timer to ~15 min | Rejected: shortening reintroduces the risk of pruning a session left blocked/idle in an open window mid-decision — the exact thing #004's long timer protects. |
+| Only shorten the timer (no lock check) | Rejected: same blocked-session risk, and window-close still takes 15 min to clear instead of being instant. |
+
+**Decision.** In `list_sessions`, build `live_workspace_folders()` from the lock files
+(skipping any lock whose `pid` fails a `kill(pid, 0)` probe — force-quit / crash left it
+behind). A session is pruned (file + subagent markers deleted, self-heals on its next event)
+when **either**:
+- `window_gone` — its `cwd` matches no live workspace folder (exact match or a subfolder it
+  `cd`'d into, same prefix rule as `workspace_root`; an **empty `cwd` matches nothing** → an
+  anonymous ghost is pruned). Instant.
+- silent past `MAX_IDLE_SECS` — the unchanged #004 backstop, which still covers a **superseded
+  session sharing a live window's lock** (two sessions in one window share one lock, so
+  liveness can't tell a dead one from a live one there — the accepted limit).
+
+**Safety gates.**
+- If **no** live lock exists at all (`live_folders` empty — a no-IDE machine, or a transient
+  read failure), lock-pruning is **skipped entirely** and only the timer applies, so one bad
+  read never nukes every light.
+- `kill(pid, 0)` treats `EPERM` (process exists, another owner) as alive, so a valid window is
+  never misread as dead.
+
+**Caveat (accepted, flagged to user).** A Claude session in a **standalone terminal**
+(Terminal.app / iTerm, outside any IDE window) has no lock, so when *any* IDE is open it is
+pruned. Integrated-terminal sessions are safe — their `cwd` sits under the window's workspace
+folder, so they match the lock. This fits the app's "one light per IDE tab" model.
+
+**Scope.** `app/src-tauri/src/lib.rs` (`pid_alive`, `live_workspace_folders`, `cwd_is_live`;
+`list_sessions` liveness prune), `app/src-tauri/Cargo.toml` (`libc` as a macOS-target dep for
+`kill(pid, 0)` — already in the lock tree at 0.2.186). No hook, status-file schema, or
+event-mapping change.
+
+**Validation.** `cargo build` clean. Verified against live machine state (temporary test
+module, since removed): the shipped `cwd_is_live`/`live_workspace_folders`/`pid_alive`
+correctly flagged both empty-`cwd` Cursor ghosts `window_gone=true` (pruned) while keeping all
+three real sessions — including one whose `cwd` was the `app/src-tauri` subfolder, matched back
+to the open ClaudeStatus window by the prefix rule — and did not false-match a
+`TradingBotXtra` prefix. **Left to confirm with the user:** rebuild + reinstall the app (the
+running installed copy predates this change), then close an IDE window and watch its light
+vanish within one poll.
+
+---
+
+### Decision 028 — Quit button in the settings panel
+
+**Context.** ClaudeStatus runs as a macOS **Accessory** app (`ActivationPolicy::Accessory`)
+so it has no Dock icon and no application menu — the two places macOS normally puts a Quit
+command. Until now the only way to stop the bar was Activity Monitor, `kill`, or (in menu-bar
+mode) nothing at all. Users need an obvious in-UI way out.
+
+**Choice.** A **Quit** button in the settings-panel footer (next to Reload / Reset to
+defaults) wired to a new `quit_app` Tauri command that calls `app.exit(0)`, tearing down the
+panel, tray, and process. Hover is red-tinted so it reads as the one destructive footer action
+without adding a confirm step (quitting is cheap and fully reversible — relaunching the app
+re-reads the hook-written status files and repopulates the bar).
+
+**Why not an app/tray menu Quit instead.** The tray item's left-click is already owned by the
+popover toggle (#026) and adding a right-click menu just for Quit would split the settings
+surface across two places; keeping every control in the one settings panel is simpler and
+consistent with Reload/Reset.
+
+**Scope.** `app/src-tauri/src/lib.rs` (`quit_app` command + handler registration),
+`app/src/index.html` (footer `#quit-btn`), `app/src/main.js` (click → `invoke("quit_app")`),
+`app/src/styles.css` (shared footer-button style + red hover). No hook, status-file schema, or
+event-mapping change. `cargo check` clean.
+
+---
+
+## 029 — Codex compatibility
+
+**Date:** 2026-07-09
+**Status:** Accepted
+
+**Context.** ClaudeStatus already had a shared status hook for Claude Code and Cursor, but
+Codex reads user-level hooks from `~/.codex/hooks.json` or inline `[hooks]` in
+`~/.codex/config.toml`, not `~/.claude/settings.json`. The official Codex Hooks manual
+(fetched 2026-07-09) also has a slightly different supported event set: no `SessionEnd`,
+`StopFailure`, or `PostToolUseFailure`.
+
+**Decision.** Keep one reporter (`hooks/report.sh`) and install it into both ecosystems:
+Claude/Cursor keep the existing full event set in `~/.claude/settings.json`; Codex gets only
+Codex-supported events in `~/.codex/hooks.json` (`SessionStart`, `UserPromptSubmit`, `Stop`,
+`SubagentStart`, `SubagentStop`, `PreToolUse`, `PostToolUse`, `PermissionRequest`). The packaged
+app self-installer and dev `node hooks/setup.mjs install` both perform the same split.
+
+The reporter now accepts Codex-style ids (`thread_id`, `threadId`, `conversation_id`,
+`conversationId`, nested thread/conversation ids), falls back to the hook command's working
+directory for `cwd`, and writes `ide:"codex"` so the app can handle those lights separately.
+
+**App behavior.** Codex sessions do not use Claude IDE lock files, so `list_sessions` skips
+lock-based pruning for `ide:"codex"` and relies on the existing 2h idle backstop. Clicking a
+Codex light opens `Codex.app`; exact thread focusing is not attempted because there is no
+documented external open-by-thread command analogous to the VS Code extension relay.
+
+**Validation.** Verified with the official Codex manual, `bash -n hooks/report.sh`,
+`node --check hooks/setup.mjs`, `cargo check`, and temp-dir smoke tests that wrote Codex-shaped
+session JSON with `ide:"codex"`, cwd from the process directory, and expected running/detail
+fields.

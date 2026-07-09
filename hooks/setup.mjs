@@ -10,13 +10,15 @@
 //   node hooks/setup.mjs uninstall
 //   node hooks/setup.mjs status
 
-import { readFileSync, writeFileSync, copyFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, copyFileSync, existsSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const SETTINGS = join(homedir(), '.claude', 'settings.json');
-const BACKUP = SETTINGS + '.claudestatus-bak';
+const CLAUDE_SETTINGS = join(homedir(), '.claude', 'settings.json');
+const CLAUDE_BACKUP = CLAUDE_SETTINGS + '.claudestatus-bak';
+const CODEX_HOOKS = join(homedir(), '.codex', 'hooks.json');
+const CODEX_BACKUP = CODEX_HOOKS + '.claudestatus-bak';
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 const REPORT = join(HOOKS_DIR, 'report.sh');
 
@@ -27,16 +29,19 @@ const SIMPLE = [
   'SubagentStart', 'SubagentStop',
 ];
 const TOOL = ['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionRequest'];
+const CODEX_SIMPLE = ['SessionStart', 'UserPromptSubmit', 'Stop', 'SubagentStart', 'SubagentStop'];
+const CODEX_TOOL = ['PreToolUse', 'PostToolUse', 'PermissionRequest'];
 
 const marker = (entry) => JSON.stringify(entry).includes('report.sh');
-const load = () => (existsSync(SETTINGS) ? JSON.parse(readFileSync(SETTINGS, 'utf8')) : {});
-const save = (s) => writeFileSync(SETTINGS, JSON.stringify(s, null, 2) + '\n');
+const load = (path) => (existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {});
+const save = (path, s) => {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify(s, null, 2) + '\n');
+};
 
-const cmd = process.argv[2] || 'status';
-
-if (cmd === 'install') {
-  if (existsSync(SETTINGS) && !existsSync(BACKUP)) copyFileSync(SETTINGS, BACKUP);
-  const s = load();
+function installHooks(path, backup, simpleEvents = SIMPLE, toolEvents = TOOL) {
+  if (existsSync(path) && !existsSync(backup)) copyFileSync(path, backup);
+  const s = load(path);
   s.hooks ??= {};
   const add = (event, withMatcher) => {
     const kept = (s.hooks[event] ?? []).filter((e) => !marker(e)); // drop stale entries
@@ -44,13 +49,13 @@ if (cmd === 'install') {
     kept.push(withMatcher ? { matcher: '*', hooks: [hook] } : { hooks: [hook] });
     s.hooks[event] = kept;
   };
-  SIMPLE.forEach((e) => add(e, false));
-  TOOL.forEach((e) => add(e, true));
-  save(s);
-  console.log(`Installed ClaudeStatus hooks for ${SIMPLE.length + TOOL.length} events into ${SETTINGS}`);
-  console.log(`Backup: ${BACKUP}`);
-} else if (cmd === 'uninstall') {
-  const s = load();
+  simpleEvents.forEach((e) => add(e, false));
+  toolEvents.forEach((e) => add(e, true));
+  save(path, s);
+}
+
+function uninstallHooks(path) {
+  const s = load(path);
   if (s.hooks) {
     for (const event of Object.keys(s.hooks)) {
       s.hooks[event] = (s.hooks[event] ?? []).filter((e) => !marker(e));
@@ -58,12 +63,32 @@ if (cmd === 'install') {
     }
     if (Object.keys(s.hooks).length === 0) delete s.hooks;
   }
-  save(s);
-  console.log(`Removed ClaudeStatus hooks from ${SETTINGS}`);
-} else {
-  const s = load();
-  const events = s.hooks
+  save(path, s);
+}
+
+function hookEvents(path) {
+  const s = load(path);
+  return s.hooks
     ? Object.entries(s.hooks).filter(([, arr]) => (arr ?? []).some(marker)).map(([e]) => e)
     : [];
-  console.log(events.length ? `Status hooks active on: ${events.join(', ')}` : 'Status hooks not installed');
+}
+
+const cmd = process.argv[2] || 'status';
+
+if (cmd === 'install') {
+  installHooks(CLAUDE_SETTINGS, CLAUDE_BACKUP);
+  installHooks(CODEX_HOOKS, CODEX_BACKUP, CODEX_SIMPLE, CODEX_TOOL);
+  console.log(`Installed ClaudeStatus hooks for ${SIMPLE.length + TOOL.length} events into ${CLAUDE_SETTINGS}`);
+  console.log(`Installed ClaudeStatus Codex hooks for ${CODEX_SIMPLE.length + CODEX_TOOL.length} events into ${CODEX_HOOKS}`);
+  console.log(`Backups: ${CLAUDE_BACKUP}, ${CODEX_BACKUP}`);
+} else if (cmd === 'uninstall') {
+  uninstallHooks(CLAUDE_SETTINGS);
+  uninstallHooks(CODEX_HOOKS);
+  console.log(`Removed ClaudeStatus hooks from ${CLAUDE_SETTINGS}`);
+  console.log(`Removed ClaudeStatus Codex hooks from ${CODEX_HOOKS}`);
+} else {
+  const claudeEvents = hookEvents(CLAUDE_SETTINGS);
+  const codexEvents = hookEvents(CODEX_HOOKS);
+  console.log(claudeEvents.length ? `Claude hooks active on: ${claudeEvents.join(', ')}` : 'Claude hooks not installed');
+  console.log(codexEvents.length ? `Codex hooks active on: ${codexEvents.join(', ')}` : 'Codex hooks not installed');
 }

@@ -458,6 +458,10 @@ function initSettings() {
   document.getElementById("reload-btn").addEventListener("click", () => {
     window.location.reload();
   });
+  // Quit the app entirely (the accessory app has no Dock/menu-bar Quit).
+  document.getElementById("quit-btn").addEventListener("click", () => {
+    invoke("quit_app");
+  });
 }
 
 // Reviewed-state tracking (app-local; decision 014). A session that just finished
@@ -520,7 +524,7 @@ function render(sessions) {
     if (!emptyEl) {
       emptyEl = document.createElement("div");
       emptyEl.className = "dot empty";
-      emptyEl.title = "No active Claude Code sessions";
+      emptyEl.title = "No active Claude Code, Codex, or Cursor sessions";
       emptyEl.setAttribute("data-tauri-drag-region", "");
       lights.appendChild(emptyEl);
       sizeChanged = true;

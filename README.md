@@ -1,16 +1,17 @@
 # ClaudeStatus
 
 A small, always-on-top **bar of lights** that shows the live status of every open
-Claude Code session — so you can tell at a glance which of your concurrent sessions
-is working, waiting on you, idle, or errored, without hunting through VS Code windows.
+Claude Code, Codex, or Cursor session — so you can tell at a glance which of your
+concurrent agents is working, waiting on you, idle, or errored, without hunting
+through windows.
 
-Run several Claude Code sessions across projects and windows and it's easy to lose track
-of which one just finished, which is blocked on a permission prompt, and which hit an
+Run several agent sessions across projects and windows and it's easy to lose track of
+which one just finished, which is blocked on a permission prompt, and which hit an
 error. ClaudeStatus floats one colored light per session over everything on screen
 (including full-screen apps), updates in real time, and lets you click a light to jump
 straight to that session.
 
-Each light is one Claude Code session:
+Each light is one Claude Code, Codex, or Cursor session:
 
 | Light | Meaning |
 |---|---|
@@ -29,16 +30,17 @@ Each light is one Claude Code session:
 - **Drag** the bar (grab the padding, not a light) to position it anywhere; it remembers
   where you put it and floats over everything, including full-screen apps.
 
-Works with **Claude Code in VS Code** and **Cursor's native agent** (both drive the same
-hook). There's also an optional VS Code extension that adds a per-window status-bar item.
+Works with **Claude Code in VS Code**, **Codex**, and **Cursor's native agent** (all
+drive the same hook). There's also an optional VS Code extension that adds a
+per-window status-bar item for Claude Code in VS Code.
 
 ## How it works
 
 Two pieces, decided independently (see [DECISIONS.md](DECISIONS.md) for the why):
 
-- **Signal layer** — a Claude Code **hook** (`report.sh`) fires on session lifecycle
+- **Signal layer** — a Claude Code/Codex **hook** (`report.sh`) fires on session lifecycle
   events and writes each session's state to `~/.claude/status/sessions/<id>.json`.
-  Hooks are global, so **one install covers every project and VS Code/Cursor window**.
+  Hooks are global, so **one install covers every project and Claude Code/Codex/Cursor window**.
   The hook does the minimum work and exits — it never blocks or slows down a turn.
 - **Display layer** — a **Tauri** app (a non-activating macOS `NSPanel`) watches that
   directory and renders the lights.
@@ -48,7 +50,7 @@ project label, and a timestamp. No prompt or transcript content is read or store
 
 ## Install (macOS, Apple Silicon)
 
-**Requirements:** macOS on Apple Silicon (M1 or later), and Claude Code and/or Cursor.
+**Requirements:** macOS on Apple Silicon (M1 or later), and Claude Code, Codex, and/or Cursor.
 
 1. Download **`ClaudeStatus_0.2.0_aarch64.dmg`** from the
    [latest release](https://github.com/Gameslayer999/ClaudeStatus/releases/latest).
@@ -67,9 +69,10 @@ project label, and a timestamp. No prompt or transcript content is read or store
    this for downloaded apps.)
 
 On first launch the app **installs its own hooks** — it writes
-`~/.claude/status/report.sh`, registers it in `~/.claude/settings.json` (backing up the
-original first), and adds the matching Cursor hooks. **Already-open Claude Code sessions
-pick it up immediately — no restart needed.**
+`~/.claude/status/report.sh`, registers it in `~/.claude/settings.json` and
+`~/.codex/hooks.json` (backing up the originals first), and adds the matching Cursor
+hooks. **Already-open Claude Code and Codex sessions pick it up immediately — no
+restart needed**, though Codex may ask you to review/trust the new hook with `/hooks`.
 
 ClaudeStatus is an accessory app (**no Dock icon**). To start it at login, add it in
 **System Settings → General → Login Items**.
@@ -115,7 +118,7 @@ Your original settings are backed up at `~/.claude/settings.json.claudestatus-ba
 ```bash
 cd app
 npm install
-node ../hooks/setup.mjs install   # register the repo's hooks (dev points at hooks/report.sh)
+node ../hooks/setup.mjs install   # register Claude + Codex repo hooks (dev points at hooks/report.sh)
 npm run tauri dev
 ```
 
@@ -132,6 +135,7 @@ hooks.
 - A light == one `session_id`, labeled by its project folder. Two windows on the *same*
   folder collapse into one label.
 - On **Cursor**, blocked (orange) is unavailable — Cursor doesn't emit a permission event.
+- On **Codex**, newly installed hooks may need review/trust in `/hooks` before they run.
 - Sessions with no activity for 2h are pruned (they reappear on their next event).
 - Subagents are tracked by lifecycle (which are running + their types), not by their
   individual live tool calls — those aren't attributable to a specific subagent.
