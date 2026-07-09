@@ -3,6 +3,7 @@
 // exposes them to the frontend via the `list_sessions` command.
 
 use serde::Serialize;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use tauri::Manager;
 #[cfg(target_os = "macos")]
@@ -35,6 +36,12 @@ struct SessionStatus {
 /// long enough that a session you're actively dealing with (even blocked/errored,
 /// which emit no further events while waiting) won't vanish out from under you.
 const MAX_IDLE_SECS: i64 = 2 * 60 * 60;
+
+/// Codex state updates frequently while a turn is active. When lifecycle hooks
+/// are not yet trusted/loaded for an already-running thread, this window keeps the
+/// synthesized Codex light green during live work and lets it settle back to idle
+/// shortly after updates stop.
+const CODEX_ACTIVE_SECS: i64 = 20;
 
 fn now_unix() -> i64 {
     std::time::SystemTime::now()
@@ -172,9 +179,84 @@ fn read_subagents(dir: &std::path::Path, id: &str) -> Vec<String> {
     out
 }
 
+fn codex_state_db() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_default();
+    PathBuf::from(home).join(".codex").join("state_5.sqlite")
+}
+
+fn label_from_cwd_or_title(cwd: &str, title: &str) -> String {
+    std::path::Path::new(cwd)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| if s == "ClaudeStatus" { "AgentStatus" } else { s }.to_string())
+        .or_else(|| {
+            let t = title.trim();
+            if t.is_empty() { None } else { Some(t.to_string()) }
+        })
+        .unwrap_or_else(|| "Codex".to_string())
+}
+
+/// Best-effort Codex fallback. Hooks are the preferred signal, but Codex may not
+/// run newly-installed hooks until the user reviews/trusts them or starts a fresh
+/// thread. The local state DB still exposes recent thread activity, so synthesize a
+/// coarse Codex light from it when no hook status file exists for that thread.
+fn read_codex_threads(now: i64, seen: &HashSet<String>) -> Vec<SessionStatus> {
+    let db = codex_state_db();
+    if !db.exists() {
+        return Vec::new();
+    }
+    let Some(db_str) = db.to_str() else {
+        return Vec::new();
+    };
+    let cutoff = now - MAX_IDLE_SECS;
+    let query = format!(
+        "select id, updated_at, cwd, title from threads where updated_at > {cutoff} order by updated_at desc limit 20;"
+    );
+    let Ok(output) = std::process::Command::new("/usr/bin/sqlite3")
+        .args(["-readonly", "-separator", "\t", db_str, &query])
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let mut parts = line.splitn(4, '\t');
+        let id = parts.next().unwrap_or("").to_string();
+        if id.is_empty() || seen.contains(&id) {
+            continue;
+        }
+        let updated_at = parts.next().and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+        let cwd = parts.next().unwrap_or("").to_string();
+        let title = parts.next().unwrap_or("").to_string();
+        let state = if now - updated_at <= CODEX_ACTIVE_SECS {
+            "running"
+        } else {
+            "idle"
+        };
+        out.push(SessionStatus {
+            id,
+            state: state.to_string(),
+            cwd: cwd.clone(),
+            label: label_from_cwd_or_title(&cwd, &title),
+            updated_at,
+            task: title,
+            detail: if state == "running" { "Codex activity".to_string() } else { String::new() },
+            ide: "codex".to_string(),
+            subagents: Vec::new(),
+        });
+    }
+    out
+}
+
 #[tauri::command]
 fn list_sessions() -> Vec<SessionStatus> {
     let mut out = Vec::new();
+    let mut seen = HashSet::new();
     let now = now_unix();
     let dir = sessions_dir();
     // Workspace folders of the currently-open IDE windows. A session whose folder
@@ -182,55 +264,58 @@ fn list_sessions() -> Vec<SessionStatus> {
     // ghost), so its light is stale (decision 027). Empty ⇒ no liveness signal, so
     // lock-pruning is skipped below and only the idle timeout applies.
     let live_folders = live_workspace_folders();
-    let Ok(entries) = std::fs::read_dir(&dir) else {
-        return out;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) != Some("json") {
-            continue;
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("json") {
+                continue;
+            }
+            let id = match path.file_stem().and_then(|s| s.to_str()) {
+                Some(s) if !s.is_empty() => s.to_string(),
+                _ => continue,
+            };
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
+                continue;
+            };
+            let updated_at = v.get("updated_at").and_then(|x| x.as_i64()).unwrap_or(0);
+            let cwd = v.get("cwd").and_then(|x| x.as_str()).unwrap_or("");
+            // Prune dead sessions (delete the file + subagent markers, skip it; self-heals
+            // on the session's next event) three ways:
+            //   (a) window gone — the session's workspace maps to no live IDE lock, so its
+            //       window was closed / the IDE quit. Instant, no waiting on the timer
+            //       (decision 027). Skipped when no live lock exists at all so one bad read
+            //       (or a no-IDE machine) never nukes every light.
+            //   (b) cwd path gone — covers renamed/deleted project folders.
+            //   (c) unclean death with the window still open, or a superseded session
+            //       sharing a live window's lock: silent past MAX_IDLE_SECS (decision 004).
+            let ide = v.get("ide").and_then(|x| x.as_str()).unwrap_or("vscode");
+            let uses_ide_locks = ide == "vscode" || ide == "cursor";
+            let window_gone = uses_ide_locks && !live_folders.is_empty() && !cwd_is_live(cwd, &live_folders);
+            let cwd_gone = !cwd.is_empty() && !std::path::Path::new(cwd).exists();
+            if window_gone || cwd_gone || now - updated_at > MAX_IDLE_SECS {
+                let _ = std::fs::remove_file(&path);
+                let _ = std::fs::remove_dir_all(dir.join(format!("{id}.subagents")));
+                continue;
+            }
+            let subagents = read_subagents(&dir, &id);
+            seen.insert(id.clone());
+            out.push(SessionStatus {
+                id,
+                state: v.get("state").and_then(|x| x.as_str()).unwrap_or("idle").to_string(),
+                cwd: cwd.to_string(),
+                label: v.get("label").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                updated_at,
+                task: v.get("task").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                detail: v.get("detail").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                ide: ide.to_string(),
+                subagents,
+            });
         }
-        let id = match path.file_stem().and_then(|s| s.to_str()) {
-            Some(s) if !s.is_empty() => s.to_string(),
-            _ => continue,
-        };
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
-            continue;
-        };
-        let updated_at = v.get("updated_at").and_then(|x| x.as_i64()).unwrap_or(0);
-        let cwd = v.get("cwd").and_then(|x| x.as_str()).unwrap_or("");
-        // Prune dead sessions (delete the file + subagent markers, skip it; self-heals
-        // on the session's next event) two ways:
-        //   (a) window gone — the session's workspace maps to no live IDE lock, so its
-        //       window was closed / the IDE quit. Instant, no waiting on the timer
-        //       (decision 027). Skipped when no live lock exists at all so one bad read
-        //       (or a no-IDE machine) never nukes every light.
-        //   (b) unclean death with the window still open, or a superseded session
-        //       sharing a live window's lock: silent past MAX_IDLE_SECS (decision 004).
-        let ide = v.get("ide").and_then(|x| x.as_str()).unwrap_or("vscode");
-        let uses_ide_locks = ide == "vscode" || ide == "cursor";
-        let window_gone = uses_ide_locks && !live_folders.is_empty() && !cwd_is_live(cwd, &live_folders);
-        if window_gone || now - updated_at > MAX_IDLE_SECS {
-            let _ = std::fs::remove_file(&path);
-            let _ = std::fs::remove_dir_all(dir.join(format!("{id}.subagents")));
-            continue;
-        }
-        let subagents = read_subagents(&dir, &id);
-        out.push(SessionStatus {
-            id,
-            state: v.get("state").and_then(|x| x.as_str()).unwrap_or("idle").to_string(),
-            cwd: cwd.to_string(),
-            label: v.get("label").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-            updated_at,
-            task: v.get("task").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-            detail: v.get("detail").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-            ide: ide.to_string(),
-            subagents,
-        });
     }
+    out.extend(read_codex_threads(now, &seen));
     // Stable order: by folder label, then id, so lights don't reshuffle each poll.
     out.sort_by(|a, b| a.label.cmp(&b.label).then_with(|| a.id.cmp(&b.id)));
     out

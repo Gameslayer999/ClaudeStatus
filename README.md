@@ -52,7 +52,7 @@ project label, and a timestamp. No prompt or transcript content is read or store
 
 **Requirements:** macOS on Apple Silicon (M1 or later), and Claude Code, Codex, and/or Cursor.
 
-1. Download **`AgentStatus_0.4.0_aarch64.dmg`** from the
+1. Download **`AgentStatus_0.4.1_aarch64.dmg`** from the
    [latest release](https://github.com/Gameslayer999/AgentStatus/releases/latest).
 2. Open the DMG and drag **AgentStatus** into **Applications**.
 3. The app is **unsigned**, so macOS Gatekeeper blocks it on first launch. Clear the

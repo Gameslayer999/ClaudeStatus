@@ -41,6 +41,7 @@
 | 026 | 2026-07-06 | Presentation-mode toggle: the bar runs **floating** (the NSPanel, default) **or in the macOS menu bar** — a `tray-icon` NSStatusItem drawn from a webview-rendered dot image (with a condense-to-single-summary-dot option), clicked to reveal the same panel as a popover below it. Amends #003 (menu bar is now an optional mode, not rejected). Settings-panel toggle, `localStorage`-persisted; menu-bar mode forces horizontal; tray ops marshaled to the main thread; icon forced non-template so the dots keep their colors | Accepted |
 | 029 | 2026-07-09 | Codex compatibility: install the shared `report.sh` into Codex user hooks at `~/.codex/hooks.json` alongside Claude's `~/.claude/settings.json`, using only Codex-supported events from the official Codex Hooks manual. The reporter accepts Codex thread/conversation id fields, falls back to the hook process cwd, tags sessions as `ide:"codex"`, and skips IDE-lock pruning for them; click-to-focus opens `Codex.app` | Accepted |
 | 030 | 2026-07-09 | Product rename: `ClaudeStatus` → `AgentStatus` now that the bar targets Claude Code, Codex, and Cursor rather than only Claude Code. App bundle, product name, docs, extension IDs, localStorage keys, hook backup suffixes, and release asset names move to AgentStatus; legacy `CLAUDESTATUS_DIR` / `CLAUDESTATUS_IGNORE` and old `/Applications/ClaudeStatus.app` cleanup remain for migration | Accepted |
+| 031 | 2026-07-09 | Codex live-state fallback: if Codex lifecycle hooks are not yet trusted/loaded for an already-running thread, synthesize Codex lights from `~/.codex/state_5.sqlite` (`threads.updated_at`) so active Codex work shows green. Also prune status files whose `cwd` no longer exists, which removes rename ghosts like the old `ClaudeStatus` workspace | Accepted |
 
 ---
 
@@ -1311,3 +1312,26 @@ localStorage keys, hook backup suffixes, and release asset names.
 `AGENTSTATUS_DIR` is the new status-dir override, but `CLAUDESTATUS_DIR` remains a legacy alias;
 `AGENTSTATUS_IGNORE` is the new opt-out, but `CLAUDESTATUS_IGNORE` still works. The installer also
 removes and stops an old `/Applications/ClaudeStatus.app` while installing `/Applications/AgentStatus.app`.
+
+---
+
+## 031 — Codex live-state fallback
+
+**Date:** 2026-07-09
+**Status:** Accepted
+
+**Context.** During the AgentStatus rename work, the visible light for this active Codex thread
+stayed gray. Investigation showed the status directory had only an old idle file from the deleted
+`/Users/gabrielchan/Documents/code/ClaudeStatus` path, while the current Codex thread was actively
+updating `~/.codex/state_5.sqlite`. No hook-written status files were being refreshed for the
+already-running thread, likely because hooks need to be loaded/trusted at thread startup.
+
+**Decision.** Keep lifecycle hooks as the primary signal, but add a best-effort Codex fallback in
+`list_sessions`: query `~/.codex/state_5.sqlite` with `/usr/bin/sqlite3`, read recent
+`threads.updated_at` rows, and synthesize `ide:"codex"` sessions when no hook status file exists
+for that thread. A thread updated in the last 20 seconds renders `running`; otherwise it renders
+`idle` until the normal 2h pruning window.
+
+**Stale-file cleanup.** Also prune hook-written status files whose non-empty `cwd` no longer
+exists. This removes renamed/deleted-folder ghosts immediately, including the old `ClaudeStatus`
+workspace file that was showing as gray after the repo moved to AgentStatus.

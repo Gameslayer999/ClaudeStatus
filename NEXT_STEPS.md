@@ -177,6 +177,11 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 
 ## Recently completed
 
+- **2026-07-09** — **Released v0.4.1: Codex live-state fallback (decision 031).** Fixed the
+  active-Codex-but-gray-light bug. Hooks remain the primary signal, but the app now synthesizes
+  Codex lights from `~/.codex/state_5.sqlite` when hooks are not yet trusted/loaded for an
+  already-running thread; recent `threads.updated_at` activity renders green. Also prunes status
+  files whose `cwd` no longer exists, removing rename ghosts from the old `ClaudeStatus` path.
 - **2026-07-09** — **Renamed ClaudeStatus → AgentStatus (decision 030).** The product name now
   matches the broader agent scope: Claude Code, Codex, and Cursor. Updated app bundle/product
   names, Tauri identifier/window title, docs, installer paths, extension metadata/command ids,
