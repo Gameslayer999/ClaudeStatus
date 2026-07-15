@@ -71,9 +71,14 @@ esac
   [ "$sid" = "empty-state-draft" ] && exit 0
   subdir="$SESSIONS_DIR/$sid.subagents"
 
-  # PreInvocation / UserPromptSubmit: extract the last user prompt from transcript if present.
+  # Antigravity only: its prompt-submit payload carries no prompt text, so recover the
+  # last user turn from the thread transcript. Gated on the declared host (decision 033) —
+  # every other host sends the prompt in the payload, and an ungated read walked its
+  # fallback chain into the real Claude transcript on every UserPromptSubmit: a 10MB
+  # read + python3 spawn per turn whose result jq then discarded (it scans for
+  # Antigravity's USER_INPUT records, which Claude transcripts never contain).
   prompt=""
-  if { [ "$EVENT" = "PreInvocation" ] || [ "$EVENT" = "UserPromptSubmit" ]; } && [ -n "$sid" ]; then
+  if [ "$IDE_ARG" = "antigravity" ] && { [ "$EVENT" = "PreInvocation" ] || [ "$EVENT" = "UserPromptSubmit" ]; } && [ -n "$sid" ]; then
     transcript_path="$(printf '%s' "$payload" | jq -r '.transcriptPath // .transcript_path // empty' 2>/dev/null | sed 's/\.jsonl$/_full.jsonl/')"
     if [ -z "$transcript_path" ] || [ ! -f "$transcript_path" ]; then
       transcript_path="$HOME/.gemini/antigravity/brain/$sid/.system_generated/logs/transcript_full.jsonl"

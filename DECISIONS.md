@@ -43,6 +43,7 @@
 | 030 | 2026-07-09 | Product rename: `ClaudeStatus` → `AgentStatus` now that the bar targets Claude Code, Codex, and Cursor rather than only Claude Code. App bundle, product name, docs, extension IDs, localStorage keys, hook backup suffixes, and release asset names move to AgentStatus; legacy `CLAUDESTATUS_DIR` / `CLAUDESTATUS_IGNORE` and old `/Applications/ClaudeStatus.app` cleanup remain for migration | Accepted |
 | 031 | 2026-07-09 | Codex live-state fallback: if Codex lifecycle hooks are not yet trusted/loaded for an already-running thread, synthesize Codex lights from `~/.codex/state_5.sqlite` (`threads.updated_at`) so active Codex work shows green. Also prune status files whose `cwd` no longer exists, which removes rename ghosts like the old `ClaudeStatus` workspace | Accepted |
 | 032 | 2026-07-09 | Codex open/close lifecycle: Codex emits **no** signal on conversation open or close (verified: no `SessionEnd` hook exists; `SessionStart` is deferred to the first turn; `updated_at`/`recency_at` advance only on turn starts). So: installers pass an explicit `codex` arg to `report.sh` (payloads are Claude-shaped and unsniffable — replaces the never-firing #029 heuristics); Codex lights expire after 10 min idle (`CODEX_IDLE_SECS`, user-approved) instead of 2h, drop instantly when no `codex` process is alive, and exclude archived threads; click-to-focus targets the VS Code window (Codex is the `openai.chatgpt` extension; `open -a Codex` was a no-op) | Accepted |
+| 033 | 2026-07-15 | Antigravity IDE as a fourth host (retroactive — shipped in 3195f11 undocumented). Hooks install into `~/.gemini/config/hooks.json` under an `agentstatus` object key (not Claude's `hooks` map), registering `PreInvocation`/`PreToolUse`/`PostToolUse`/`Stop` as `report.sh <Event> antigravity` — declared host per #032. Payload differs from Claude: workspace in `workspacePaths[]`, tools in `toolCall.name`/`toolCall.args`, and **no prompt text**, so the task label is recovered from the thread transcript and unwrapped from `<USER_REQUEST>`. That transcript read is gated on `ide == antigravity`: ungated it walked its fallback chain into the real Claude transcript on every `UserPromptSubmit` (~98 ms + a 10 MB read per turn, discarded). Antigravity uses IDE-lock pruning and the 2h idle backstop like vscode/cursor; click-to-focus targets `Antigravity IDE.app`. **Hook events not yet verified against a live install (Guideline #4)** | Accepted, unverified |
 
 ---
 
@@ -1390,3 +1391,80 @@ status dir verified `report.sh <Event> codex` writes `ide:"codex"`, no-arg write
 `ide:"vscode"`, Cursor detection is unchanged, and a Codex `Stop` (id-only payload) carries
 `cwd`/`ide` forward. Rebuilt and reinstalled via `./install.sh`; the app self-installer
 rewrote `~/.codex/hooks.json` with the `codex` arg.
+
+---
+
+## 033 — Antigravity IDE as a fourth host; host-gated transcript reads
+
+**Date:** 2026-07-15
+**Status:** Accepted, unverified against a live install
+
+**Context.** Support for Google's Antigravity IDE (the `~/.gemini` agent) shipped in commit
+`3195f11` without a decision entry, alongside the #032 Codex work. This entry is retroactive:
+it records what was built and why, and fixes the one place the new code contradicted #032.
+
+Antigravity is the first host whose hook config is **not** Claude-shaped, so the existing
+`merge_hooks` path (which writes a `hooks` map of `{event: [{matcher, hooks}]}`) does not
+apply. It is also the first host that **sends no prompt text** on its prompt-submit event,
+which is why the task label has to come from somewhere else.
+
+**Decision.**
+
+- **Separate installer path.** `~/.gemini/config/hooks.json` uses a top-level `agentstatus`
+  object key (`{enabled: true, PreInvocation: [...], PreToolUse: [...], ...}`) rather than
+  Claude's `hooks` map, so both installers get a dedicated writer
+  (`merge_antigravity_hooks` in `install.rs`, `installAntigravityHooks` in `setup.mjs`)
+  instead of a parameterization of the Claude path. Same guarantees as the other hosts:
+  one-time `.agentstatus-bak` backup, idempotent rewrite, `uninstall` deletes the
+  `agentstatus` key and nothing else. `PreToolUse`/`PostToolUse` use Antigravity's regex
+  matcher `".*"` (Claude's glob `"*"` is not the same dialect).
+- **Declared host, per #032.** Hooks register as `report.sh <Event> antigravity`; the ide
+  comes from arg 2. No payload sniffing, for the same reason as Codex.
+- **Event→state mapping.** `PreInvocation`/`PostInvocation` → `running`, joining the
+  existing `UserPromptSubmit`/`PreToolUse`/`PostToolUse` → `running` set; `Stop` → `idle`.
+  Antigravity has no permission-request or turn-failure event registered, so `blocked` and
+  `error` are currently unreachable for this host — its lights are green/gray only.
+- **Payload differences.** cwd from `workspacePaths[0]` (not `.cwd`); tool name from
+  `toolCall.name`; tool args from `toolCall.args.CommandLine` / `.TargetFile` /
+  `.AbsolutePath`. Its tool names (`run_command`, `write_to_file`, `view_file`, …) are
+  folded into the existing Bash/Edit/Read detail branches.
+- **Task label from the transcript, host-gated.** `PreInvocation` carries no prompt, so the
+  last `USER_INPUT` record is read from
+  `~/.gemini/antigravity/brain/<sid>/.system_generated/logs/transcript_full.jsonl` and, if
+  it is wrapped in `<USER_REQUEST>…</USER_REQUEST>`, unwrapped to the bare request. **This
+  read is gated on `IDE_ARG = antigravity`.** As first shipped it was gated only on the
+  event name — and `UserPromptSubmit` is *Claude's* event, so in every Claude session the
+  fallback chain missed the two `.gemini` paths and landed on the real Claude transcript,
+  spawning `python3` over it on every turn. Measured on a 10 MB transcript: **137 ms/call
+  → 39 ms/call once gated** (~98 ms saved per prompt submit). The work was entirely
+  wasted — the parser scans for Antigravity's `USER_INPUT` records, which Claude
+  transcripts never contain (grep: 0 matches), and jq prefers the payload's `.prompt`
+  anyway. It violated Guideline #3 (hooks must be fast) and #5 (don't read transcript
+  bodies) for zero benefit.
+- **Pruning and focus.** Antigravity is added to `uses_ide_locks` (vscode/cursor) — it is a
+  VS Code fork with the same `~/.claude/ide/*.lock` liveness signal — and keeps the 2h
+  `MAX_IDLE_SECS` backstop. Codex's short `CODEX_IDLE_SECS` + process-liveness rules
+  (#032) do **not** apply, because those exist only to work around Codex's missing
+  close signal. Click-to-focus raises `Antigravity IDE.app` via
+  `/Applications/Antigravity IDE.app/Contents/Resources/app/bin/antigravity-ide`. Like
+  Codex, the Claude extension focus-relay is not used — an Antigravity session is not a
+  Claude session, so focus lands on the window, not the exact tab.
+
+**Alternatives considered.** Generalizing `merge_hooks` to emit both config shapes — rejected;
+the two schemas share no structure, and a flag-driven writer would be harder to read than two
+explicit ones (Karpathy: no over-configurability). Dropping the task label for Antigravity
+rather than reading its transcript — viable and cheaper, but the label is what makes a light
+tell you *which* work is running; gating the read preserves it at no cost to other hosts.
+
+**Validation.** `bash -n` clean. Smoke-tested against a temp status dir: a Claude
+`UserPromptSubmit` carrying a real 10 MB `transcript_path` now takes the payload prompt with
+no `python3` spawn (`ide:"vscode"`, task from `.prompt`), and an Antigravity `PreInvocation`
+with no prompt field still recovers its task from a synthetic `transcript_full.jsonl` and
+unwraps `<USER_REQUEST>` (`ide:"antigravity"`).
+
+**Open — Guideline #4.** The Antigravity event names, payload field names, hook-config schema,
+and transcript path/format above are all **unverified against a running Antigravity install**;
+they were committed without an observed event log. Before relying on this host, capture real
+events from a live session and confirm each. The `_full.jsonl`-then-`.jsonl` transcript
+fallback in particular reads as a guess. The `PostInvocation` → `running` mapping is dead code
+today: no installer registers that event.

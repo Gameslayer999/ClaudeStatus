@@ -7,6 +7,16 @@
 
 ## Current state
 
+- **Antigravity IDE support shipped, but UNVERIFIED (decision 033).** The bar now installs
+  hooks into `~/.gemini/config/hooks.json` and renders `ide:"antigravity"` lights. This
+  landed in `3195f11` without a decision entry or an observed event log; 033 documents it
+  retroactively. **Its event names, payload fields, hook-config schema, and transcript path
+  are all guesses until confirmed against a live Antigravity session (Guideline #4)** — see
+  "Now" below. Known gaps: no permission/failure event is registered, so Antigravity lights
+  can only be green/gray (never orange/red), and the `PostInvocation` mapping is dead code.
+  Fixed on the way in: the transcript read is now gated on the antigravity host — ungated it
+  was spawning `python3` over the real Claude transcript on **every Claude prompt submit**
+  (137 ms → 39 ms per turn, ~98 ms saved; the result was always discarded).
 - **Codex open/close lifecycle fixed (decision 032).** Verified against the installed
   `openai.chatgpt` extension binary and the `openai/codex` source: Codex emits **no signal**
   on conversation open or close (no `SessionEnd` hook; `SessionStart` deferred to the first
@@ -169,6 +179,15 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
    (UI Design Principle #3).
 8. **Stretch — polish.** Position persistence across reboots, per-session titles in labels,
    configurable colors/size, optional pulse animation on blocked.
+10. **Verify Antigravity against a live session (decision 033) — Guideline #4.** The whole
+    integration is built on unobserved assumptions. Run a real Antigravity session with the
+    hooks installed and confirm, in order: (a) the hooks actually fire from the `agentstatus`
+    key in `~/.gemini/config/hooks.json`; (b) the event names (`PreInvocation`, `Stop`, …);
+    (c) the payload fields (`workspacePaths[]`, `toolCall.name`, `toolCall.args.*`); (d) the
+    transcript path and its `USER_INPUT` / `<USER_REQUEST>` shape — the
+    `_full.jsonl`-then-`.jsonl` fallback is a guess. Then decide whether Antigravity exposes
+    a permission-request or turn-failure event; without one its lights can never go
+    orange/red, which quietly breaks UI Principle #2 for that host.
 9. ✅ **Extension parity — "done" light (decision 014).** *Done 2026-07-06.* The VS Code
    extension now mirrors the bar: a finished-but-unreviewed turn (`idle && detail`) renders at
    full brightness, acknowledged idle is dimmed (`disabledForeground`); click-to-focus also
@@ -188,6 +207,17 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 ---
 
 ## Recently completed
+
+- **2026-07-15** — **Documented Antigravity support (decision 033) and fixed the transcript
+  read it added.** The Antigravity host shipped undocumented in `3195f11`; 033 records its
+  hook schema (`agentstatus` key in `~/.gemini/config/hooks.json`), event→state mapping,
+  payload differences, and pruning/focus behavior, and flags the whole thing as unverified
+  against a live install. Fixed: the transcript read was gated on the event name alone, and
+  `UserPromptSubmit` is Claude's event — so every Claude prompt submit walked the fallback
+  chain into the real Claude transcript and ran `python3` over it (137 ms → 39 ms per turn
+  once gated on `ide == antigravity`; ~98 ms saved). The parse was always discarded: it scans
+  for `USER_INPUT` records that Claude transcripts don't contain, and jq prefers the payload
+  `.prompt` regardless. Smoke-tested both hosts against a temp status dir.
 
 - **2026-07-09** — **Fixed the faint rectangle around the pill on light backgrounds.** The pill's
   `backdrop-filter: blur()` sat on `#bar` alongside `border-radius: 999px`; WebKit does not clip a
