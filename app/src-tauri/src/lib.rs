@@ -43,6 +43,13 @@ const MAX_IDLE_SECS: i64 = 2 * 60 * 60;
 /// shortly after updates stop.
 const CODEX_ACTIVE_SECS: i64 = 20;
 
+/// Codex emits no signal at all when a conversation is opened or closed (its hook
+/// set has no SessionEnd, and both `updated_at` and `recency_at` in its state DB
+/// advance only on turn starts — verified against Codex source, decision 032). A
+/// closed conversation can therefore only expire by timeout: a Codex light with no
+/// turn activity for this long is dropped. It reappears on the thread's next turn.
+const CODEX_IDLE_SECS: i64 = 10 * 60;
+
 fn now_unix() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -184,6 +191,18 @@ fn codex_state_db() -> PathBuf {
     PathBuf::from(home).join(".codex").join("state_5.sqlite")
 }
 
+/// Whether any Codex process is alive (the IDE extension's `codex app-server` and
+/// the terminal TUI share the process name `codex`). No process ⇒ every Codex
+/// light is stale and dropped immediately. Fails open: if pgrep itself can't run,
+/// we keep the lights rather than nuke them on a bad read.
+fn codex_running() -> bool {
+    std::process::Command::new("pgrep")
+        .args(["-x", "codex"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(true)
+}
+
 fn label_from_cwd_or_title(cwd: &str, title: &str) -> String {
     std::path::Path::new(cwd)
         .file_name()
@@ -201,7 +220,10 @@ fn label_from_cwd_or_title(cwd: &str, title: &str) -> String {
 /// run newly-installed hooks until the user reviews/trusts them or starts a fresh
 /// thread. The local state DB still exposes recent thread activity, so synthesize a
 /// coarse Codex light from it when no hook status file exists for that thread.
-fn read_codex_threads(now: i64, seen: &HashSet<String>) -> Vec<SessionStatus> {
+fn read_codex_threads(now: i64, seen: &HashSet<String>, codex_alive: bool) -> Vec<SessionStatus> {
+    if !codex_alive {
+        return Vec::new();
+    }
     let db = codex_state_db();
     if !db.exists() {
         return Vec::new();
@@ -209,9 +231,9 @@ fn read_codex_threads(now: i64, seen: &HashSet<String>) -> Vec<SessionStatus> {
     let Some(db_str) = db.to_str() else {
         return Vec::new();
     };
-    let cutoff = now - MAX_IDLE_SECS;
+    let cutoff = now - CODEX_IDLE_SECS;
     let query = format!(
-        "select id, updated_at, cwd, title from threads where updated_at > {cutoff} order by updated_at desc limit 20;"
+        "select id, updated_at, cwd, title from threads where updated_at > {cutoff} and archived = 0 order by updated_at desc limit 20;"
     );
     let Ok(output) = std::process::Command::new("/usr/bin/sqlite3")
         .args(["-readonly", "-separator", "\t", db_str, &query])
@@ -264,6 +286,7 @@ fn list_sessions() -> Vec<SessionStatus> {
     // ghost), so its light is stale (decision 027). Empty ⇒ no liveness signal, so
     // lock-pruning is skipped below and only the idle timeout applies.
     let live_folders = live_workspace_folders();
+    let codex_alive = codex_running();
     if let Ok(entries) = std::fs::read_dir(&dir) {
         for entry in entries.flatten() {
             let path = entry.path();
@@ -291,11 +314,16 @@ fn list_sessions() -> Vec<SessionStatus> {
             //   (b) cwd path gone — covers renamed/deleted project folders.
             //   (c) unclean death with the window still open, or a superseded session
             //       sharing a live window's lock: silent past MAX_IDLE_SECS (decision 004).
+            //   (d) Codex-specific (decision 032): Codex signals neither conversation
+            //       close nor app quit, so its lights expire on the short CODEX_IDLE_SECS
+            //       timeout and drop instantly when no codex process is alive.
             let ide = v.get("ide").and_then(|x| x.as_str()).unwrap_or("vscode");
-            let uses_ide_locks = ide == "vscode" || ide == "cursor";
+            let uses_ide_locks = ide == "vscode" || ide == "cursor" || ide == "antigravity";
             let window_gone = uses_ide_locks && !live_folders.is_empty() && !cwd_is_live(cwd, &live_folders);
             let cwd_gone = !cwd.is_empty() && !std::path::Path::new(cwd).exists();
-            if window_gone || cwd_gone || now - updated_at > MAX_IDLE_SECS {
+            let idle_limit = if ide == "codex" { CODEX_IDLE_SECS } else { MAX_IDLE_SECS };
+            let codex_gone = ide == "codex" && !codex_alive;
+            if window_gone || cwd_gone || codex_gone || now - updated_at > idle_limit {
                 let _ = std::fs::remove_file(&path);
                 let _ = std::fs::remove_dir_all(dir.join(format!("{id}.subagents")));
                 continue;
@@ -315,7 +343,7 @@ fn list_sessions() -> Vec<SessionStatus> {
             });
         }
     }
-    out.extend(read_codex_threads(now, &seen));
+    out.extend(read_codex_threads(now, &seen, codex_alive));
     // Stable order: by folder label, then id, so lights don't reshuffle each poll.
     out.sort_by(|a, b| a.label.cmp(&b.label).then_with(|| a.id.cmp(&b.id)));
     out
@@ -401,10 +429,12 @@ fn raise_window_fast(root: &str, ide: &str) {
     if name.is_empty() {
         return;
     }
+    // Codex runs as the openai.chatgpt extension inside VS Code — there is no
+    // standalone Codex app to raise, so its lights target VS Code windows too.
     let proc = if ide == "cursor" {
         "Cursor"
-    } else if ide == "codex" {
-        "Codex"
+    } else if ide == "antigravity" {
+        "Antigravity IDE"
     } else {
         "Code"
     };
@@ -441,14 +471,14 @@ fn raise_window_fast(root: &str, ide: &str) {
 fn focus_session(cwd: String, ide: String, session_id: String) {
     // Focus the exact session tab via the extension relay (decision 015); the window
     // raise below only gets us to the right *window*. Written first so the extension
-    // can pick it up while / right after the window comes forward.
-    write_focus_request(&session_id);
+    // can pick it up while / right after the window comes forward. Codex sessions
+    // are not Claude sessions, so the relay can't focus them — skip the request and
+    // land on the VS Code window holding the thread's workspace (decision 032).
+    if ide != "codex" {
+        write_focus_request(&session_id);
+    }
     #[cfg(target_os = "macos")]
     {
-        if ide == "codex" {
-            let _ = std::process::Command::new("open").args(["-a", "Codex"]).spawn();
-            return;
-        }
         if cwd.is_empty() {
             return;
         }
@@ -461,6 +491,11 @@ fn focus_session(cwd: String, ide: String, session_id: String) {
             (
                 "/Applications/Cursor.app/Contents/Resources/app/bin/cursor",
                 "Cursor",
+            )
+        } else if ide == "antigravity" {
+            (
+                "/Applications/Antigravity IDE.app/Contents/Resources/app/bin/antigravity-ide",
+                "Antigravity IDE",
             )
         } else {
             (

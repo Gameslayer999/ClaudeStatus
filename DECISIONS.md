@@ -42,6 +42,7 @@
 | 029 | 2026-07-09 | Codex compatibility: install the shared `report.sh` into Codex user hooks at `~/.codex/hooks.json` alongside Claude's `~/.claude/settings.json`, using only Codex-supported events from the official Codex Hooks manual. The reporter accepts Codex thread/conversation id fields, falls back to the hook process cwd, tags sessions as `ide:"codex"`, and skips IDE-lock pruning for them; click-to-focus opens `Codex.app` | Accepted |
 | 030 | 2026-07-09 | Product rename: `ClaudeStatus` → `AgentStatus` now that the bar targets Claude Code, Codex, and Cursor rather than only Claude Code. App bundle, product name, docs, extension IDs, localStorage keys, hook backup suffixes, and release asset names move to AgentStatus; legacy `CLAUDESTATUS_DIR` / `CLAUDESTATUS_IGNORE` and old `/Applications/ClaudeStatus.app` cleanup remain for migration | Accepted |
 | 031 | 2026-07-09 | Codex live-state fallback: if Codex lifecycle hooks are not yet trusted/loaded for an already-running thread, synthesize Codex lights from `~/.codex/state_5.sqlite` (`threads.updated_at`) so active Codex work shows green. Also prune status files whose `cwd` no longer exists, which removes rename ghosts like the old `ClaudeStatus` workspace | Accepted |
+| 032 | 2026-07-09 | Codex open/close lifecycle: Codex emits **no** signal on conversation open or close (verified: no `SessionEnd` hook exists; `SessionStart` is deferred to the first turn; `updated_at`/`recency_at` advance only on turn starts). So: installers pass an explicit `codex` arg to `report.sh` (payloads are Claude-shaped and unsniffable — replaces the never-firing #029 heuristics); Codex lights expire after 10 min idle (`CODEX_IDLE_SECS`, user-approved) instead of 2h, drop instantly when no `codex` process is alive, and exclude archived threads; click-to-focus targets the VS Code window (Codex is the `openai.chatgpt` extension; `open -a Codex` was a no-op) | Accepted |
 
 ---
 
@@ -1335,3 +1336,57 @@ for that thread. A thread updated in the last 20 seconds renders `running`; othe
 **Stale-file cleanup.** Also prune hook-written status files whose non-empty `cwd` no longer
 exists. This removes renamed/deleted-folder ghosts immediately, including the old `ClaudeStatus`
 workspace file that was showing as gray after the repo moved to AgentStatus.
+
+---
+
+## 032 — Codex open/close lifecycle: declared host, short idle expiry, process-liveness pruning
+
+**Date:** 2026-07-09
+**Status:** Accepted
+
+**Context.** Opening/closing Codex conversations didn't affect the bar: a dot appeared only
+when a conversation's first prompt was sent, and closing a conversation left its dot for up
+to 2 hours. Investigation (against the installed `openai.chatgpt` VS Code extension binary
+26.623.141536 and the `openai/codex` source) established that Codex provides **no open/close
+signal anywhere**:
+
+- The binary's complete hook event set (`HookEventsToml`) is `PreToolUse, PermissionRequest,
+  PostToolUse, PreCompact, PostCompact, SessionStart, UserPromptSubmit, SubagentStart,
+  SubagentStop, Stop` — **no `SessionEnd`**, confirming #029's manual reading.
+- `SessionStart` hooks are deferred until the first turn (`run_pending_session_start_hooks`),
+  so no hook fires on conversation open. A dot at first prompt is the earliest Codex allows.
+- In `~/.codex/state_5.sqlite`, both `threads.updated_at` and `threads.recency_at` advance
+  only on `TurnStarted` (verified in `codex-rs/thread-store/src/thread_metadata_sync.rs`).
+  Opening or closing a conversation writes nothing to disk.
+
+Two AgentStatus bugs compounded this. (1) Codex hook payloads are Claude-shaped
+(`session_id` + `cwd` both present), so all three #029 `$isCodex` payload heuristics were
+dead code — live Codex sessions were tagged `ide:"vscode"` (observed on a real thread). The
+`cwd`-empty heuristic could even mis-tag a Claude payload. (2) The #031 fallback synthesized
+a dot for any thread updated in the last 2h, open or closed. Also, this machine's Codex is
+the VS Code extension — there is no `Codex.app`, so #029's click-to-focus (`open -a Codex`)
+silently did nothing.
+
+**Decision.**
+- **Declared host, not sniffed:** both installers (`hooks/setup.mjs`, app `install.rs`)
+  register Codex hooks as `report.sh <Event> codex`; `report.sh` takes the ide from arg 2
+  and the payload heuristics are removed.
+- **Short idle expiry (user-approved):** Codex lights (hook-written and synthesized) expire
+  after `CODEX_IDLE_SECS = 10 min` without turn activity, instead of `MAX_IDLE_SECS = 2h` —
+  a closed conversation can only expire by timeout, and a wrong light is worse than no light
+  (UI principle 4). An open-but-idle conversation's dot also fades and reappears on its next
+  turn. Alternatives offered: activity-only (~90s) dots, or keeping 2h with quit-only pruning.
+- **Process-liveness pruning:** if no `codex` process is alive (`pgrep -x codex` covers the
+  extension's `codex app-server` and the terminal TUI; fails open on pgrep errors), all Codex
+  lights drop immediately and their status files are deleted.
+- **Fallback hygiene:** the #031 synthesized query now also excludes `archived = 1` threads.
+- **Click-to-focus:** Codex lights focus the VS Code window holding the thread's workspace
+  (same `code` CLI path as `ide:"vscode"`); the Claude extension focus-relay request is
+  skipped since Codex sessions aren't Claude sessions. Lock-based window pruning still does
+  not apply to Codex (a terminal TUI session's cwd need not be open in any VS Code window).
+
+**Validation.** `bash -n`, `node --check`, `cargo check` clean; smoke tests against a temp
+status dir verified `report.sh <Event> codex` writes `ide:"codex"`, no-arg writes
+`ide:"vscode"`, Cursor detection is unchanged, and a Codex `Stop` (id-only payload) carries
+`cwd`/`ide` forward. Rebuilt and reinstalled via `./install.sh`; the app self-installer
+rewrote `~/.codex/hooks.json` with the `codex` arg.

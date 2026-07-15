@@ -30,19 +30,23 @@
 # "vscode") drives click-to-focus. Cursor sends the workspace in .workspace_roots[]
 # (not .cwd) and uses camelCase event names (normalized below).
 #
-# Codex support: the same hook shape is installed into ~/.codex/hooks.json. Codex
-# command hooks run with the session cwd as their working directory, so cwd falls
-# back to $PWD, and the session id accepts Codex thread/conversation id fields.
+# Codex support: the same hook shape is installed into ~/.codex/hooks.json, with an
+# explicit "codex" second argument (decision 032) — Codex payloads are Claude-shaped
+# (session_id + cwd), so the host can't be sniffed from the payload. Codex command
+# hooks run with the session cwd as their working directory, so cwd falls back to
+# $PWD, and the session id accepts Codex thread/conversation id fields.
 #
 # MUST be fast, non-blocking, and fail-silent (Agent Guideline #3): never write
 # to stdout, never exit non-zero, swallow every error. Invoked as:
-#   report.sh <EventName>          (event JSON arrives on stdin)
+#   report.sh <EventName> [ide]    (event JSON arrives on stdin; ide is "codex"
+#                                   when registered in ~/.codex/hooks.json)
 #
 # Dependency: jq (present on this machine; the Milestone 5 installer will verify it).
 
 STATUS_DIR="${AGENTSTATUS_DIR:-${CLAUDESTATUS_DIR:-$HOME/.claude/status}}"
 SESSIONS_DIR="$STATUS_DIR/sessions"
 EVENT="${1:-}"
+IDE_ARG="${2:-}"
 
 # Normalize Cursor's camelCase event names to the Claude PascalCase names the
 # rest of this script keys on (decision 018). Cursor runs this same hook two ways:
@@ -66,6 +70,38 @@ esac
   # Cursor fires sessionStart for an unopened "draft" composer — skip that phantom.
   [ "$sid" = "empty-state-draft" ] && exit 0
   subdir="$SESSIONS_DIR/$sid.subagents"
+
+  # PreInvocation / UserPromptSubmit: extract the last user prompt from transcript if present.
+  prompt=""
+  if { [ "$EVENT" = "PreInvocation" ] || [ "$EVENT" = "UserPromptSubmit" ]; } && [ -n "$sid" ]; then
+    transcript_path="$(printf '%s' "$payload" | jq -r '.transcriptPath // .transcript_path // empty' 2>/dev/null | sed 's/\.jsonl$/_full.jsonl/')"
+    if [ -z "$transcript_path" ] || [ ! -f "$transcript_path" ]; then
+      transcript_path="$HOME/.gemini/antigravity/brain/$sid/.system_generated/logs/transcript_full.jsonl"
+    fi
+    if [ ! -f "$transcript_path" ]; then
+      transcript_path="$(printf '%s' "$payload" | jq -r '.transcriptPath // .transcript_path // empty' 2>/dev/null)"
+      if [ -z "$transcript_path" ]; then
+        transcript_path="$HOME/.gemini/antigravity/brain/$sid/.system_generated/logs/transcript.jsonl"
+      fi
+    fi
+    if [ -f "$transcript_path" ]; then
+      prompt="$(python3 -c '
+import sys, json
+try:
+    content = sys.stdin.read()
+    last = ""
+    for i, part in enumerate(content.split("\n{\"step_index\":")):
+        if i > 0: part = "{\"step_index\":" + part
+        try:
+            obj = json.loads(part)
+            if obj.get("type") == "USER_INPUT":
+                last = obj.get("content", "")
+        except: pass
+    print(last)
+except: pass
+' < "$transcript_path" 2>/dev/null)"
+    fi
+  fi
 
   # SessionEnd: drop this session's light and its subagent markers.
   if [ "$EVENT" = "SessionEnd" ]; then
@@ -106,19 +142,21 @@ esac
   # One jq pass: map event -> state, carry forward task, compute a fresh detail,
   # and emit the merged status object (or empty to skip unmapped events).
   obj="$(printf '%s' "$payload" | jq -c \
-      --arg event "$EVENT" --argjson ts "$ts" --arg oldjson "$old_json" '
+      --arg event "$EVENT" --argjson ts "$ts" --arg oldjson "$old_json" --arg ideArg "$IDE_ARG" --arg prompt "$prompt" '
     def clean: (. // "") | gsub("[\n\r\t]+";" ") | gsub("^ +| +$";"");
     def trunc($n): clean | if (length > $n) then (.[:$n] + "…") else . end;
+    def extract_request: if test("<USER_REQUEST>") then ((capture("<USER_REQUEST>(?<s>.*?)</USER_REQUEST>"; "m").s | clean) as $req | if $req != "" then $req else . end) else . end;
     ($oldjson | if . == "" then {} else (fromjson? // {}) end) as $old
     | . as $p
     | ({ "UserPromptSubmit":"running", "PreToolUse":"running", "PostToolUse":"running",
+         "PreInvocation":"running", "PostInvocation":"running",
          "PermissionRequest":"blocked", "Stop":"idle", "SessionStart":"idle",
          "StopFailure":"error" }[$event]) as $base
     | ($p.cursor_version != null) as $isCursor
-    | (($p.source // $p.app // $p.client // $p.surface // "") | tostring | test("codex"; "i")) as $payloadCodex
-    | (($p.session_id // "") == "" and (($p.thread_id // $p.threadId // $p.conversation_id // $p.conversationId // $p.thread.id // $p.conversation.id // "") != "")) as $idLooksCodex
-    | (($p.cwd // "") == "" and (env.PWD // "") != "") as $cwdLooksCodex
-    | ($payloadCodex or $idLooksCodex or $cwdLooksCodex) as $isCodex
+    # Codex is declared by the installer (arg 2), never sniffed: Codex payloads carry
+    # Claude-shaped session_id + cwd, so no payload heuristic can distinguish them.
+    | ($ideArg == "codex") as $isCodex
+    | ($ideArg == "antigravity") as $isAntigravity
     | (($p.status // "") | test("error|fail|abort|cancel"; "i")) as $failedStop
     | (if $event == "Stop" and $failedStop then "error" else $base end) as $state
     | select($state != null)
@@ -126,14 +164,20 @@ esac
     # the exec dir of that tool call, not the session folder — prefer workspace_roots.
     | (if $isCursor then (($p.workspace_roots // [])[0] // $old.cwd)
        elif $isCodex then ($p.cwd // $old.cwd // env.PWD)
+       elif $isAntigravity then (($p.workspacePaths // [])[0] // $old.cwd)
        else ($p.cwd // $old.cwd) end // "") as $cwd
-    | (if $isCursor then "cursor" elif $isCodex then "codex" else ($old.ide // "vscode") end) as $ide
-    | ($p.tool_name // $p.toolName // $p.tool // "") as $tool
-    | (if $event == "UserPromptSubmit" then (($p.prompt // $p.user_prompt // $p.input // $p.text) | trunc(160)) else ($old.task // "") end) as $task
+    | (if $isCursor then "cursor" elif $isCodex then "codex" elif $isAntigravity then "antigravity" else ($old.ide // "vscode") end) as $ide
+    | ($p.toolCall.name // $p.tool_name // $p.toolName // $p.tool // "") as $tool
+    | (if ($event | test("^(UserPromptSubmit|PreInvocation)$")) then
+         ((if ($p.prompt // $p.user_prompt // $p.input // $p.text // "") != "" then ($p.prompt // $p.user_prompt // $p.input // $p.text)
+           elif $prompt != "" then $prompt
+           else ($old.task // "") end) | extract_request | trunc(160))
+       else ($old.task // "") end) as $task
     | (if $event == "PreToolUse" then
-         (if $tool == "Bash" then "$ " + ($p.tool_input.command | trunc(90))
-          elif ($tool | test("^(Edit|Write|Read|NotebookEdit)$")) then
-            $tool + " " + (($p.tool_input.file_path // "") | split("/") | last)
+         (if ($tool | test("^(Bash|run_command)$")) then
+            "$ " + (($p.tool_input.command // $p.toolCall.args.CommandLine) | trunc(90))
+          elif ($tool | test("^(Edit|Write|Read|NotebookEdit|write_to_file|replace_file_content|multi_replace_file_content|view_file|read_file|write_file)$"; "i")) then
+            $tool + " " + (($p.tool_input.file_path // $p.toolCall.args.TargetFile // $p.toolCall.args.AbsolutePath // "") | split("/") | last)
           else "Running " + $tool end)
        elif $event == "PermissionRequest" then
          (if $tool == "AskUserQuestion" then "⏸ waiting — a question for you"
@@ -141,7 +185,7 @@ esac
        elif $event == "Stop" then
          (if $failedStop then ("⚠ turn failed — " + ($p.status // "")) else (($p.last_assistant_message // $p.lastAssistantMessage // $p.message // "") | trunc(160)) end)
        elif $event == "StopFailure" then ("⚠ turn failed" + (if ($p.error_type // "") != "" then " — " + $p.error_type else "" end))
-       elif $event == "SessionStart" then ""
+       elif ($event | test("^(SessionStart|PreInvocation|PostInvocation)$")) then ""
        else ($old.detail // "") end) as $detail
     | { state: $state, cwd: $cwd, ide: $ide,
         label: ($cwd | split("/") | map(select(length > 0)) | last // ""),

@@ -7,6 +7,18 @@
 
 ## Current state
 
+- **Codex open/close lifecycle fixed (decision 032).** Verified against the installed
+  `openai.chatgpt` extension binary and the `openai/codex` source: Codex emits **no signal**
+  on conversation open or close (no `SessionEnd` hook; `SessionStart` deferred to the first
+  turn; DB timestamps advance only on turn starts) — a dot at first prompt is the earliest
+  Codex allows. Fixes shipped: installers pass an explicit `codex` arg to `report.sh`
+  (payloads are Claude-shaped, the #029 sniffing heuristics never fired — live sessions were
+  mislabeled `ide:"vscode"`); Codex lights expire after **10 min** idle instead of 2h, drop
+  instantly when no `codex` process is alive, and skip archived threads; click-to-focus now
+  targets the VS Code window (`open -a Codex` was a no-op — no such app). Rebuilt + reinstalled
+  via `./install.sh`; `~/.codex/hooks.json` rewritten with the arg. **Watch for:** an
+  open-but-idle Codex conversation's dot also fades at 10 min (reappears on its next turn) —
+  revisit the window if that annoys in practice.
 - **Cursor support added (decision 018) — in verification.** Cursor's native agent is now
   tracked on the same bar: Cursor bridges Claude Code hooks (runs `~/.claude/status/report.sh`
   from `~/.claude/settings.json`), so running/idle/error/remove work for free; native
@@ -177,6 +189,24 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 
 ## Recently completed
 
+- **2026-07-09** — **Fixed the faint rectangle around the pill on light backgrounds.** The pill's
+  `backdrop-filter: blur()` sat on `#bar` alongside `border-radius: 999px`; WebKit does not clip a
+  backdrop-filter to the element's (or an ancestor's) rounded corners, so the blurred backdrop
+  leaked to the bounding box and showed as a lighter rectangle over non-uniform/light backgrounds.
+  `overflow: hidden` on a parent did not clip it either. Moved the frosted pill (fill + border +
+  blur) onto a `#pill` layer behind the lights (`z-index: -1`, `pointer-events: none`) and clipped
+  the blur with `clip-path: inset(0 round 999px)` — the one thing WebKit does honor — with a
+  `.settings-open` override to `15px` to match the panel corners; the drop shadow stays on `#bar`
+  so `clip-path` doesn't clip it away. `--bar-opacity` behavior and the badges/hover-scale that
+  spill outside the pill are unchanged. Verified in a dev build over a white background: the
+  square-cornered halo is gone, leaving only the intended rounded shadow. Ships on next rebuild.
+- **2026-07-09** — **Fixed Codex open/close lifecycle (decision 032).** Established (from the
+  installed binary + `openai/codex` source) that Codex has no conversation open/close signal at
+  all; replaced the dead payload-sniffing heuristics with an explicit `codex` arg from both
+  installers, shortened Codex light expiry to 10 min idle (user-approved) with instant drop when
+  no `codex` process runs, excluded archived threads from the #031 fallback, and pointed
+  click-to-focus at the VS Code window hosting the thread. Rebuilt/reinstalled the app;
+  smoke-tested `report.sh` tagging for codex/claude/cursor payloads.
 - **2026-07-09** — **Renamed ClaudeStatus → AgentStatus (decision 030).** The product name now
   matches the broader agent scope: Claude Code, Codex, and Cursor. Updated app bundle/product
   names, Tauri identifier/window title, docs, installer paths, extension metadata/command ids,
