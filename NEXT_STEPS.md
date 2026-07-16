@@ -208,6 +208,18 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 
 ## Recently completed
 
+- **2026-07-15** — **Released v0.4.0.** Bumped `0.3.0 → 0.4.0` (`tauri.conf.json`,
+  `Cargo.toml`, `package.json`, lockfiles, README DMG name), rebuilt
+  `AgentStatus_0.4.0_aarch64.dmg`, installed/relaunched `/Applications/AgentStatus.app`, and
+  tagged/published `v0.4.0` from `development`. Contents: the Codex lifecycle fix (decision
+  032), Antigravity as a fourth host (decision 033 — **unverified against a live install**,
+  see item 10), the pill backdrop-filter clipping fix, the Antigravity transcript-read gate
+  (~98 ms/turn off every Claude prompt submit), and the latched hover-scale fix.
+- **2026-07-15** — **Fixed the hover scale latching after a light click.** Clicking a light
+  focuses another app's window, so the pointer leaves the bar without WebKit delivering a
+  `mouseleave` — `:hover` stayed latched and the dot sat at `scale(1.18)` indefinitely. A
+  `#bar.nohover` class added on click neutralizes the hover transform and is removed on the
+  next `mousemove`, when the pointer's real position is known again.
 - **2026-07-15** — **Documented Antigravity support (decision 033) and fixed the transcript
   read it added.** The Antigravity host shipped undocumented in `3195f11`; 033 records its
   hook schema (`agentstatus` key in `~/.gemini/config/hooks.json`), event→state mapping,
