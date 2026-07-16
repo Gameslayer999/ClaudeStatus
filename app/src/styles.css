@@ -143,6 +143,11 @@ body {
 .dot:hover {
   transform: scale(1.18);
 }
+/* Clicking a light focuses another app's window, so we never get the mouseleave
+   and :hover stays latched on the dot. Suppressed until the next real mousemove. */
+#bar.nohover .dot:hover {
+  transform: none;
+}
 .dot.empty {
   cursor: grab;
 }

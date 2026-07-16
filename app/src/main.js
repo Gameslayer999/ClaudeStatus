@@ -274,6 +274,16 @@ function hidePopover() {
   }
 }
 
+// Drop the latched hover scale after a click hands focus to another app: no
+// mouseleave ever arrives, so the dot would stay enlarged. Cleared on the next
+// mousemove, i.e. as soon as the pointer's real position is known again.
+function suppressHover() {
+  const bar = document.getElementById("bar");
+  if (!bar || bar.classList.contains("nohover")) return;
+  bar.classList.add("nohover");
+  document.addEventListener("mousemove", () => bar.classList.remove("nohover"), { once: true });
+}
+
 // Light size + per-state colors — the other display prefs, same localStorage
 // pattern as orientation. Defaults mirror the CSS so a cleared/absent pref looks
 // identical to the stock bar.
@@ -551,6 +561,7 @@ function render(sessions) {
         if (el._updatedAt != null) reviewedAt.set(s.id, el._updatedAt);
         if (el.className === "dot done") el.className = "dot idle"; // instant feedback
         focusSession(el._cwd, el._ide, s.id);
+        suppressHover();
         if (currentMode() === "menubar") hidePopover(); // dismiss the popover on select
       });
       dots.set(s.id, el);
