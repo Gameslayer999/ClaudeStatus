@@ -5,59 +5,20 @@ Claude Code, Codex, Cursor, or Antigravity session — so you can tell at a glan
 of your concurrent agents is working, waiting on you, idle, or errored, without hunting
 through windows.
 
-> **Quickest setup:** grab the prebuilt DMG from the
-> [latest release](https://github.com/Gameslayer999/AgentStatus/releases/latest) and
-> drag it to Applications — the app wires up all its hooks itself on first launch. See
-> [Install](#install-macos-apple-silicon) below. (macOS, Apple Silicon.)
-
 Run several agent sessions across projects and windows and it's easy to lose track of
 which one just finished, which is blocked on a permission prompt, and which hit an
 error. AgentStatus floats one colored light per session over everything on screen
 (including full-screen apps), updates in real time, and lets you click a light to jump
 straight to that session.
 
-Each light is one Claude Code, Codex, Cursor, or Antigravity session:
-
-| Light | Meaning |
-|---|---|
-| 🟢 green | running — actively working on a turn |
-| 🟠 orange (pulsing) | blocked — waiting for you (a permission prompt or a question) |
-| ⚪ white | done — the turn just finished and you haven't looked yet |
-| ⚫ dim gray | idle — finished and acknowledged (you've focused it) |
-| 🔴 red (pulsing) | error — a turn failed |
-
-- **Hover** a light to see the session's project, its task, and what it's doing right now.
-- **A blue count badge** on a light means that session has that many subagents running
-  (hover lists their types).
-- **Click** a light to jump to that session's window (VS Code, Cursor, or Antigravity) and
-  reveal its tab.
-- **Right-click** the bar to open settings — orientation (row/column), light size, spacing,
-  per-state colors, and bar opacity.
-- **Drag** the bar (grab the padding, not a light) to position it anywhere; it remembers
-  where you put it and floats over everything, including full-screen apps.
-
 Works with **Claude Code in VS Code**, **Codex**, **Cursor's native agent**, and
 **Google's Antigravity IDE** (all drive the same hook). There's also an optional VS Code
 extension that adds a per-window status-bar item for Claude Code in VS Code.
 
-## How it works
-
-Two pieces, decided independently (see [DECISIONS.md](DECISIONS.md) for the why):
-
-- **Signal layer** — a single **hook** (`report.sh`) fires on session lifecycle events and
-  writes each session's state to `~/.claude/status/sessions/<id>.json`. Hooks are global, so
-  **one install covers every project and Claude Code / Codex / Cursor / Antigravity window**.
-  The hook does the minimum work and exits — it never blocks or slows down a turn.
-- **Display layer** — a **Tauri** app (a non-activating macOS `NSPanel`) watches that
-  directory and renders the lights.
-
-The status file holds only what the lights need — `session_id`, coarse state, a short
-project label, and a timestamp. No prompt or transcript content is stored. (The one
-transcript read is on Antigravity, whose hook payload carries no prompt text: the hook
-extracts just the short task label from the thread transcript — nothing else is read or
-kept.)
-
 ## Install (macOS, Apple Silicon)
+
+The fastest path is the prebuilt DMG — no build tools, and the app wires up all its hooks
+itself on first launch.
 
 **Requirements:** macOS on Apple Silicon (M1 or later), and any of Claude Code, Codex,
 Cursor, or Antigravity.
@@ -104,6 +65,45 @@ If you're on Intel, or want to build it yourself:
 This needs [Rust](https://rustup.rs), Node, and `jq` (`brew install jq`). It builds the
 app and copies it to `/Applications`; the app self-installs its hooks on first launch,
 same as the DMG. (On a fresh install you still need the Gatekeeper step above.)
+
+## The lights
+
+Each light is one Claude Code, Codex, Cursor, or Antigravity session:
+
+| Light | Meaning |
+|---|---|
+| 🟢 green | running — actively working on a turn |
+| 🟠 orange (pulsing) | blocked — waiting for you (a permission prompt or a question) |
+| ⚪ white | done — the turn just finished and you haven't looked yet |
+| ⚫ dim gray | idle — finished and acknowledged (you've focused it) |
+| 🔴 red (pulsing) | error — a turn failed |
+
+- **Hover** a light to see the session's project, its task, and what it's doing right now.
+- **A blue count badge** on a light means that session has that many subagents running
+  (hover lists their types).
+- **Click** a light to jump to that session's window (VS Code, Cursor, or Antigravity) and
+  reveal its tab.
+- **Right-click** the bar to open settings — orientation (row/column), light size, spacing,
+  per-state colors, and bar opacity.
+- **Drag** the bar (grab the padding, not a light) to position it anywhere; it remembers
+  where you put it and floats over everything, including full-screen apps.
+
+## How it works
+
+Two pieces, decided independently (see [DECISIONS.md](DECISIONS.md) for the why):
+
+- **Signal layer** — a single **hook** (`report.sh`) fires on session lifecycle events and
+  writes each session's state to `~/.claude/status/sessions/<id>.json`. Hooks are global, so
+  **one install covers every project and Claude Code / Codex / Cursor / Antigravity window**.
+  The hook does the minimum work and exits — it never blocks or slows down a turn.
+- **Display layer** — a **Tauri** app (a non-activating macOS `NSPanel`) watches that
+  directory and renders the lights.
+
+The status file holds only what the lights need — `session_id`, coarse state, a short
+project label, and a timestamp. No prompt or transcript content is stored. (The one
+transcript read is on Antigravity, whose hook payload carries no prompt text: the hook
+extracts just the short task label from the thread transcript — nothing else is read or
+kept.)
 
 ## Optional — VS Code extension
 
