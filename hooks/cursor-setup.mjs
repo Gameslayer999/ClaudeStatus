@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// ClaudeStatus — install/uninstall the native Cursor status hooks (decision 018).
+// AgentStatus — install/uninstall the native Cursor status hooks (decision 018).
 //
 // Cursor already runs report.sh via its Claude-compat bridge (it reads
 // ~/.claude/settings.json), which covers running/idle/error/remove. But the bridge
@@ -23,7 +23,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 const HOOKS_JSON = join(homedir(), '.cursor', 'hooks.json');
-const BACKUP = HOOKS_JSON + '.claudestatus-bak';
+const BACKUP = HOOKS_JSON + '.agentstatus-bak';
 const REPORT = join(homedir(), '.claude', 'status', 'report.sh');
 
 // Only the events Cursor's Claude bridge does NOT forward. Everything else
@@ -54,7 +54,7 @@ if (cmd === 'install') {
     j.hooks[event] = kept;
   }
   save(j);
-  console.log(`Installed ClaudeStatus native Cursor hooks for ${EVENTS.length} events into ${HOOKS_JSON}`);
+  console.log(`Installed AgentStatus native Cursor hooks for ${EVENTS.length} events into ${HOOKS_JSON}`);
   if (!existsSync(REPORT)) console.log(`WARNING: ${REPORT} does not exist yet — launch/rebuild the app so it writes the installed report.sh.`);
 } else if (cmd === 'uninstall') {
   if (!existsSync(HOOKS_JSON)) { console.log('No ~/.cursor/hooks.json — nothing to remove'); process.exit(0); }
@@ -64,7 +64,7 @@ if (cmd === 'install') {
     if (j.hooks[event].length === 0) delete j.hooks[event];
   }
   save(j);
-  console.log(`Removed ClaudeStatus native Cursor hooks from ${HOOKS_JSON}`);
+  console.log(`Removed AgentStatus native Cursor hooks from ${HOOKS_JSON}`);
 } else {
   const j = load();
   const events = Object.entries(j.hooks)

@@ -1,8 +1,9 @@
-// ClaudeStatus — Tauri backend.
+// AgentStatus — Tauri backend.
 // Reads the per-session status files written by the hook (decision 007) and
 // exposes them to the frontend via the `list_sessions` command.
 
 use serde::Serialize;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use tauri::Manager;
 #[cfg(target_os = "macos")]
@@ -13,7 +14,7 @@ mod install;
 /// Tray icon id — used to fetch the tray (`app.tray_by_id`) from the mode/image
 /// commands after it's built in `setup`.
 #[cfg(target_os = "macos")]
-const TRAY_ID: &str = "claudestatus";
+const TRAY_ID: &str = "agentstatus";
 
 #[derive(Serialize)]
 struct SessionStatus {
@@ -36,6 +37,19 @@ struct SessionStatus {
 /// which emit no further events while waiting) won't vanish out from under you.
 const MAX_IDLE_SECS: i64 = 2 * 60 * 60;
 
+/// Codex state updates frequently while a turn is active. When lifecycle hooks
+/// are not yet trusted/loaded for an already-running thread, this window keeps the
+/// synthesized Codex light green during live work and lets it settle back to idle
+/// shortly after updates stop.
+const CODEX_ACTIVE_SECS: i64 = 20;
+
+/// Codex emits no signal at all when a conversation is opened or closed (its hook
+/// set has no SessionEnd, and both `updated_at` and `recency_at` in its state DB
+/// advance only on turn starts — verified against Codex source, decision 032). A
+/// closed conversation can therefore only expire by timeout: a Codex light with no
+/// turn activity for this long is dropped. It reappears on the thread's next turn.
+const CODEX_IDLE_SECS: i64 = 10 * 60;
+
 fn now_unix() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -52,9 +66,12 @@ fn now_millis() -> i64 {
         .unwrap_or(0)
 }
 
-/// Root status directory (~/.claude/status), honoring $CLAUDESTATUS_DIR (same
-/// override the hook uses).
+/// Root status directory (~/.claude/status), honoring $AGENTSTATUS_DIR (same
+/// override the hook uses). $CLAUDESTATUS_DIR is kept as a legacy alias.
 fn status_root() -> PathBuf {
+    if let Ok(dir) = std::env::var("AGENTSTATUS_DIR") {
+        return PathBuf::from(dir);
+    }
     if let Ok(dir) = std::env::var("CLAUDESTATUS_DIR") {
         return PathBuf::from(dir);
     }
@@ -169,9 +186,99 @@ fn read_subagents(dir: &std::path::Path, id: &str) -> Vec<String> {
     out
 }
 
+fn codex_state_db() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_default();
+    PathBuf::from(home).join(".codex").join("state_5.sqlite")
+}
+
+/// Whether any Codex process is alive (the IDE extension's `codex app-server` and
+/// the terminal TUI share the process name `codex`). No process ⇒ every Codex
+/// light is stale and dropped immediately. Fails open: if pgrep itself can't run,
+/// we keep the lights rather than nuke them on a bad read.
+fn codex_running() -> bool {
+    std::process::Command::new("pgrep")
+        .args(["-x", "codex"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(true)
+}
+
+fn label_from_cwd_or_title(cwd: &str, title: &str) -> String {
+    std::path::Path::new(cwd)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| if s == "ClaudeStatus" { "AgentStatus" } else { s }.to_string())
+        .or_else(|| {
+            let t = title.trim();
+            if t.is_empty() { None } else { Some(t.to_string()) }
+        })
+        .unwrap_or_else(|| "Codex".to_string())
+}
+
+/// Best-effort Codex fallback. Hooks are the preferred signal, but Codex may not
+/// run newly-installed hooks until the user reviews/trusts them or starts a fresh
+/// thread. The local state DB still exposes recent thread activity, so synthesize a
+/// coarse Codex light from it when no hook status file exists for that thread.
+fn read_codex_threads(now: i64, seen: &HashSet<String>, codex_alive: bool) -> Vec<SessionStatus> {
+    if !codex_alive {
+        return Vec::new();
+    }
+    let db = codex_state_db();
+    if !db.exists() {
+        return Vec::new();
+    }
+    let Some(db_str) = db.to_str() else {
+        return Vec::new();
+    };
+    let cutoff = now - CODEX_IDLE_SECS;
+    let query = format!(
+        "select id, updated_at, cwd, title from threads where updated_at > {cutoff} and archived = 0 order by updated_at desc limit 20;"
+    );
+    let Ok(output) = std::process::Command::new("/usr/bin/sqlite3")
+        .args(["-readonly", "-separator", "\t", db_str, &query])
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let mut parts = line.splitn(4, '\t');
+        let id = parts.next().unwrap_or("").to_string();
+        if id.is_empty() || seen.contains(&id) {
+            continue;
+        }
+        let updated_at = parts.next().and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+        let cwd = parts.next().unwrap_or("").to_string();
+        let title = parts.next().unwrap_or("").to_string();
+        let state = if now - updated_at <= CODEX_ACTIVE_SECS {
+            "running"
+        } else {
+            "idle"
+        };
+        out.push(SessionStatus {
+            id,
+            state: state.to_string(),
+            cwd: cwd.clone(),
+            label: label_from_cwd_or_title(&cwd, &title),
+            updated_at,
+            task: title,
+            detail: if state == "running" { "Codex activity".to_string() } else { String::new() },
+            ide: "codex".to_string(),
+            subagents: Vec::new(),
+        });
+    }
+    out
+}
+
 #[tauri::command]
 fn list_sessions() -> Vec<SessionStatus> {
     let mut out = Vec::new();
+    let mut seen = HashSet::new();
     let now = now_unix();
     let dir = sessions_dir();
     // Workspace folders of the currently-open IDE windows. A session whose folder
@@ -179,55 +286,64 @@ fn list_sessions() -> Vec<SessionStatus> {
     // ghost), so its light is stale (decision 027). Empty ⇒ no liveness signal, so
     // lock-pruning is skipped below and only the idle timeout applies.
     let live_folders = live_workspace_folders();
-    let Ok(entries) = std::fs::read_dir(&dir) else {
-        return out;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) != Some("json") {
-            continue;
+    let codex_alive = codex_running();
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("json") {
+                continue;
+            }
+            let id = match path.file_stem().and_then(|s| s.to_str()) {
+                Some(s) if !s.is_empty() => s.to_string(),
+                _ => continue,
+            };
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
+                continue;
+            };
+            let updated_at = v.get("updated_at").and_then(|x| x.as_i64()).unwrap_or(0);
+            let cwd = v.get("cwd").and_then(|x| x.as_str()).unwrap_or("");
+            // Prune dead sessions (delete the file + subagent markers, skip it; self-heals
+            // on the session's next event) three ways:
+            //   (a) window gone — the session's workspace maps to no live IDE lock, so its
+            //       window was closed / the IDE quit. Instant, no waiting on the timer
+            //       (decision 027). Skipped when no live lock exists at all so one bad read
+            //       (or a no-IDE machine) never nukes every light.
+            //   (b) cwd path gone — covers renamed/deleted project folders.
+            //   (c) unclean death with the window still open, or a superseded session
+            //       sharing a live window's lock: silent past MAX_IDLE_SECS (decision 004).
+            //   (d) Codex-specific (decision 032): Codex signals neither conversation
+            //       close nor app quit, so its lights expire on the short CODEX_IDLE_SECS
+            //       timeout and drop instantly when no codex process is alive.
+            let ide = v.get("ide").and_then(|x| x.as_str()).unwrap_or("vscode");
+            let uses_ide_locks = ide == "vscode" || ide == "cursor" || ide == "antigravity";
+            let window_gone = uses_ide_locks && !live_folders.is_empty() && !cwd_is_live(cwd, &live_folders);
+            let cwd_gone = !cwd.is_empty() && !std::path::Path::new(cwd).exists();
+            let idle_limit = if ide == "codex" { CODEX_IDLE_SECS } else { MAX_IDLE_SECS };
+            let codex_gone = ide == "codex" && !codex_alive;
+            if window_gone || cwd_gone || codex_gone || now - updated_at > idle_limit {
+                let _ = std::fs::remove_file(&path);
+                let _ = std::fs::remove_dir_all(dir.join(format!("{id}.subagents")));
+                continue;
+            }
+            let subagents = read_subagents(&dir, &id);
+            seen.insert(id.clone());
+            out.push(SessionStatus {
+                id,
+                state: v.get("state").and_then(|x| x.as_str()).unwrap_or("idle").to_string(),
+                cwd: cwd.to_string(),
+                label: v.get("label").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                updated_at,
+                task: v.get("task").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                detail: v.get("detail").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                ide: ide.to_string(),
+                subagents,
+            });
         }
-        let id = match path.file_stem().and_then(|s| s.to_str()) {
-            Some(s) if !s.is_empty() => s.to_string(),
-            _ => continue,
-        };
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
-            continue;
-        };
-        let updated_at = v.get("updated_at").and_then(|x| x.as_i64()).unwrap_or(0);
-        let cwd = v.get("cwd").and_then(|x| x.as_str()).unwrap_or("");
-        // Prune dead sessions (delete the file + subagent markers, skip it; self-heals
-        // on the session's next event) two ways:
-        //   (a) window gone — the session's workspace maps to no live IDE lock, so its
-        //       window was closed / the IDE quit. Instant, no waiting on the timer
-        //       (decision 027). Skipped when no live lock exists at all so one bad read
-        //       (or a no-IDE machine) never nukes every light.
-        //   (b) unclean death with the window still open, or a superseded session
-        //       sharing a live window's lock: silent past MAX_IDLE_SECS (decision 004).
-        let ide = v.get("ide").and_then(|x| x.as_str()).unwrap_or("vscode");
-        let uses_ide_locks = ide == "vscode" || ide == "cursor";
-        let window_gone = uses_ide_locks && !live_folders.is_empty() && !cwd_is_live(cwd, &live_folders);
-        if window_gone || now - updated_at > MAX_IDLE_SECS {
-            let _ = std::fs::remove_file(&path);
-            let _ = std::fs::remove_dir_all(dir.join(format!("{id}.subagents")));
-            continue;
-        }
-        let subagents = read_subagents(&dir, &id);
-        out.push(SessionStatus {
-            id,
-            state: v.get("state").and_then(|x| x.as_str()).unwrap_or("idle").to_string(),
-            cwd: cwd.to_string(),
-            label: v.get("label").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-            updated_at,
-            task: v.get("task").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-            detail: v.get("detail").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-            ide: ide.to_string(),
-            subagents,
-        });
     }
+    out.extend(read_codex_threads(now, &seen, codex_alive));
     // Stable order: by folder label, then id, so lights don't reshuffle each poll.
     out.sort_by(|a, b| a.label.cmp(&b.label).then_with(|| a.id.cmp(&b.id)));
     out
@@ -313,10 +429,12 @@ fn raise_window_fast(root: &str, ide: &str) {
     if name.is_empty() {
         return;
     }
+    // Codex runs as the openai.chatgpt extension inside VS Code — there is no
+    // standalone Codex app to raise, so its lights target VS Code windows too.
     let proc = if ide == "cursor" {
         "Cursor"
-    } else if ide == "codex" {
-        "Codex"
+    } else if ide == "antigravity" {
+        "Antigravity IDE"
     } else {
         "Code"
     };
@@ -353,14 +471,14 @@ fn raise_window_fast(root: &str, ide: &str) {
 fn focus_session(cwd: String, ide: String, session_id: String) {
     // Focus the exact session tab via the extension relay (decision 015); the window
     // raise below only gets us to the right *window*. Written first so the extension
-    // can pick it up while / right after the window comes forward.
-    write_focus_request(&session_id);
+    // can pick it up while / right after the window comes forward. Codex sessions
+    // are not Claude sessions, so the relay can't focus them — skip the request and
+    // land on the VS Code window holding the thread's workspace (decision 032).
+    if ide != "codex" {
+        write_focus_request(&session_id);
+    }
     #[cfg(target_os = "macos")]
     {
-        if ide == "codex" {
-            let _ = std::process::Command::new("open").args(["-a", "Codex"]).spawn();
-            return;
-        }
         if cwd.is_empty() {
             return;
         }
@@ -373,6 +491,11 @@ fn focus_session(cwd: String, ide: String, session_id: String) {
             (
                 "/Applications/Cursor.app/Contents/Resources/app/bin/cursor",
                 "Cursor",
+            )
+        } else if ide == "antigravity" {
+            (
+                "/Applications/Antigravity IDE.app/Contents/Resources/app/bin/antigravity-ide",
+                "Antigravity IDE",
             )
         } else {
             (
@@ -488,7 +611,7 @@ pub fn run() {
 
     // Single-instance guard (release only). A second launch of the app — the
     // installed /Applications copy or a dev build, both sharing the identifier
-    // com.claudestatus.app — pings the already-running instance and exits, instead
+    // com.agentstatus.app — pings the already-running instance and exits, instead
     // of drawing a second overlapping bar off the same status dir. Must be the first
     // plugin registered. Gated off in dev so `npm run tauri dev` still runs while the
     // installed copy is up.
@@ -548,7 +671,7 @@ pub fn run() {
                     Ok(tray) => {
                         let _ = tray.set_visible(false);
                     }
-                    Err(e) => eprintln!("[claudestatus] tray build failed: {e}"),
+                    Err(e) => eprintln!("[agentstatus] tray build failed: {e}"),
                 }
             }
             // Packaged app self-installs its hooks. In dev we keep the repo hooks

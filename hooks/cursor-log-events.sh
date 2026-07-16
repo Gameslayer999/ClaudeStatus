@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ClaudeStatus — Cursor signal-verification logger (temporary; Agent Guideline #4).
+# AgentStatus — Cursor signal-verification logger (temporary; Agent Guideline #4).
 #
 # Captures every Cursor hook event plus its full stdin payload so we can verify,
 # against the installed Cursor version, which events actually fire and what

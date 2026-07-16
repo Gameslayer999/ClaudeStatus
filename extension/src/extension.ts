@@ -1,4 +1,4 @@
-// ClaudeStatus VS Code extension.
+// AgentStatus VS Code extension.
 //
 // Shows the live status of THIS window's Claude Code sessions as status-bar items
 // (one per session whose cwd is within this window's workspace). Reads the same
@@ -26,8 +26,10 @@ interface Session {
 }
 
 function statusDir(): string {
-  const env = process.env.CLAUDESTATUS_DIR;
-  return env && env.length ? env : path.join(os.homedir(), ".claude", "status");
+  const env = process.env.AGENTSTATUS_DIR;
+  if (env && env.length) return env;
+  const legacy = process.env.CLAUDESTATUS_DIR;
+  return legacy && legacy.length ? legacy : path.join(os.homedir(), ".claude", "status");
 }
 function sessionsDir(): string {
   return path.join(statusDir(), "sessions");
@@ -181,7 +183,7 @@ function refresh(): void {
     // Pass the current finish time so the click acknowledges exactly this turn.
     item.command = {
       title: "Focus session",
-      command: "claudestatus.focusSession",
+      command: "agentstatus.focusSession",
       arguments: [s.id, s.updated_at],
     };
     item.show();
@@ -235,7 +237,7 @@ function ensureHooks(context: vscode.ExtensionContext): void {
     let settings: any = {};
     if (fs.existsSync(settingsPath)) {
       const txt = fs.readFileSync(settingsPath, "utf8");
-      const bak = settingsPath + ".claudestatus-bak";
+      const bak = settingsPath + ".agentstatus-bak";
       if (!fs.existsSync(bak)) fs.writeFileSync(bak, txt);
       try {
         settings = JSON.parse(txt);
@@ -269,7 +271,7 @@ function ensureHooks(context: vscode.ExtensionContext): void {
 }
 
 export function activate(context: vscode.ExtensionContext): void {
-  if (vscode.workspace.getConfiguration("claudestatus").get<boolean>("ensureHooks", true)) {
+  if (vscode.workspace.getConfiguration("agentstatus").get<boolean>("ensureHooks", true)) {
     ensureHooks(context);
   }
 
@@ -279,7 +281,7 @@ export function activate(context: vscode.ExtensionContext): void {
   lastFocusReq = seedReq ? seedReq.requested_at : -1;
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("claudestatus.focusSession", async (id: string, updatedAt?: number) => {
+    vscode.commands.registerCommand("agentstatus.focusSession", async (id: string, updatedAt?: number) => {
       // Acknowledge the finished turn (keyed by its finish time), then reflect it
       // immediately — the "done" item drops to dim idle (decision 014).
       if (typeof updatedAt === "number") {

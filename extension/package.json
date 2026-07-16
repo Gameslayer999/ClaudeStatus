@@ -1,9 +1,9 @@
 {
-  "name": "claudestatus",
-  "displayName": "ClaudeStatus",
+  "name": "agentstatus",
+  "displayName": "AgentStatus",
   "description": "Live status of this window's Claude Code sessions, in the status bar.",
   "version": "0.1.2",
-  "publisher": "claudestatus",
+  "publisher": "agentstatus",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -17,17 +17,17 @@
   "contributes": {
     "commands": [
       {
-        "command": "claudestatus.focusSession",
-        "title": "ClaudeStatus: Focus Session"
+        "command": "agentstatus.focusSession",
+        "title": "AgentStatus: Focus Session"
       }
     ],
     "configuration": {
-      "title": "ClaudeStatus",
+      "title": "AgentStatus",
       "properties": {
-        "claudestatus.ensureHooks": {
+        "agentstatus.ensureHooks": {
           "type": "boolean",
           "default": true,
-          "description": "On activation, install the ClaudeStatus hooks into ~/.claude/settings.json if they aren't already present."
+          "description": "On activation, install the AgentStatus hooks into ~/.claude/settings.json if they aren't already present."
         }
       }
     }

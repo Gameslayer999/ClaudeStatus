@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# ClaudeStatus installer — builds the app from source and installs it to
+# AgentStatus installer — builds the app from source and installs it to
 # /Applications. The app wires up its own Claude Code hooks on first launch,
 # so this script only needs to build and place it.
 set -euo pipefail
 cd "$(dirname "$0")"
 
-echo "== ClaudeStatus installer =="
+echo "== AgentStatus installer =="
 
 # --- prerequisites ---
 command -v jq   >/dev/null 2>&1 || { echo "Missing: jq (install with: brew install jq)"; exit 1; }
@@ -22,17 +22,21 @@ cd app
 npm install
 npm run tauri build
 
-APP="src-tauri/target/release/bundle/macos/ClaudeStatus.app"
+APP="src-tauri/target/release/bundle/macos/AgentStatus.app"
 [ -d "$APP" ] || { echo "Build did not produce $APP"; exit 1; }
 
 # --- install ---
-PROC="ClaudeStatus.app/Contents/MacOS/app"
+PROC="AgentStatus.app/Contents/MacOS/app"
+LEGACY_PROC="ClaudeStatus.app/Contents/MacOS/app"
 WAS_RUNNING=0
 pgrep -f "$PROC" >/dev/null 2>&1 && WAS_RUNNING=1
+pgrep -f "$LEGACY_PROC" >/dev/null 2>&1 && WAS_RUNNING=1
 
-echo "Installing to /Applications/ClaudeStatus.app…"
+echo "Installing to /Applications/AgentStatus.app…"
+pkill -f "$LEGACY_PROC" || true
+rm -rf "/Applications/AgentStatus.app"
 rm -rf "/Applications/ClaudeStatus.app"
-cp -R "$APP" "/Applications/ClaudeStatus.app"
+cp -R "$APP" "/Applications/AgentStatus.app"
 
 # If an instance was already running, it's been Gatekeeper-approved before — quit
 # and relaunch it so the rebuild takes effect. (The single-instance guard would
@@ -40,13 +44,19 @@ cp -R "$APP" "/Applications/ClaudeStatus.app"
 # the old code on screen.) First-time installs fall through to manual instructions
 # because an unsigned app can't be `open`ed past Gatekeeper without a right-click.
 if [ "$WAS_RUNNING" = "1" ]; then
-  echo "Restarting the running ClaudeStatus…"
+  echo "Restarting the running AgentStatus…"
   pkill -f "$PROC" || true
+  pkill -f "$LEGACY_PROC" || true
   # Wait for the process to exit and release its single-instance socket.
-  for _ in $(seq 1 20); do pgrep -f "$PROC" >/dev/null 2>&1 || break; sleep 0.2; done
+  for _ in $(seq 1 20); do
+    if ! pgrep -f "$PROC" >/dev/null 2>&1 && ! pgrep -f "$LEGACY_PROC" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 0.2
+  done
   sleep 0.3
-  open "/Applications/ClaudeStatus.app"
-  echo "Done. ClaudeStatus rebuilt and relaunched."
+  open "/Applications/AgentStatus.app"
+  echo "Done. AgentStatus rebuilt and relaunched."
   exit 0
 fi
 
@@ -54,20 +64,20 @@ cat <<'EOF'
 
 Done. Launch it once to wire up the hooks and show the bar:
 
-  open /Applications/ClaudeStatus.app
+  open /Applications/AgentStatus.app
 
 First launch only: because the app is unsigned, macOS Gatekeeper will block it —
 right-click the app in Finder and choose "Open", then confirm.
 
 The app is an accessory app (no Dock icon). To have it start automatically:
-  System Settings → General → Login Items → add ClaudeStatus.
+  System Settings → General → Login Items → add AgentStatus.
 
-Optional — faster window switching: grant ClaudeStatus Accessibility permission
-(System Settings → Privacy & Security → Accessibility → add ClaudeStatus). This
+Optional — faster window switching: grant AgentStatus Accessibility permission
+(System Settings → Privacy & Security → Accessibility → add AgentStatus). This
 lets a light click raise a same-Space window in ~0.2s instead of ~1s. Without it,
 click-to-focus still works, just via the slower IDE CLI.
 
-To uninstall: delete /Applications/ClaudeStatus.app and run
+To uninstall: delete /Applications/AgentStatus.app and run
   node hooks/setup.mjs uninstall
-(or restore ~/.claude/settings.json.claudestatus-bak).
+(or restore ~/.claude/settings.json.agentstatus-bak).
 EOF

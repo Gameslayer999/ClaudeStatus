@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// ClaudeStatus — Cursor logger install/uninstall (temporary verification tool).
+// AgentStatus — Cursor logger install/uninstall (temporary verification tool).
 //
 // Merges the Cursor event logger into ~/.cursor/hooks.json WITHOUT clobbering
 // existing hooks (Agent Guideline #3). Idempotent: re-running install never
@@ -17,7 +17,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HOOKS_JSON = join(homedir(), '.cursor', 'hooks.json');
-const BACKUP = HOOKS_JSON + '.claudestatus-bak';
+const BACKUP = HOOKS_JSON + '.agentstatus-bak';
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 const LOGGER = join(HOOKS_DIR, 'cursor-log-events.sh');
 
@@ -70,7 +70,7 @@ if (cmd === 'install') {
     if (j.hooks[event].length === 0) delete j.hooks[event];
   }
   save(j);
-  console.log(`Removed ClaudeStatus Cursor logger entries from ${HOOKS_JSON}`);
+  console.log(`Removed AgentStatus Cursor logger entries from ${HOOKS_JSON}`);
 } else {
   const j = load();
   const events = Object.entries(j.hooks)

@@ -3,11 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="stylesheet" href="styles.css" />
-    <title>ClaudeStatus</title>
+    <title>AgentStatus</title>
     <script src="/main.js" defer></script>
   </head>
   <body>
     <div id="bar" data-tauri-drag-region>
+      <!-- The frosted pill (fill + blur + border + shadow). Kept as a clipped layer
+           behind the lights so the backdrop blur can't leak past the rounded corners
+           (a WebKit bug that otherwise draws a faint rectangle on light backgrounds). -->
+      <div id="pill"></div>
       <div id="lights" data-tauri-drag-region></div>
       <!-- Settings panel: hidden until right-click on the bar toggles it. -->
       <div id="settings" hidden>

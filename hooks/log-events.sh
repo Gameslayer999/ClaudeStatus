@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ClaudeStatus — Milestone 1 event logger.
+# AgentStatus — Milestone 1 event logger.
 #
 # Captures every Claude Code hook event plus its full stdin payload so we can
 # verify, against the installed version, which events actually fire and what

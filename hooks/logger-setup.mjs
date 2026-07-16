@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// ClaudeStatus — Milestone 1 logger install/uninstall.
+// AgentStatus — Milestone 1 logger install/uninstall.
 //
 // Merges the event logger into the user's ~/.claude/settings.json WITHOUT
 // clobbering existing settings or hooks (Agent Guideline #3). Idempotent:
@@ -16,7 +16,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const SETTINGS = join(homedir(), '.claude', 'settings.json');
-const BACKUP = SETTINGS + '.claudestatus-bak';
+const BACKUP = SETTINGS + '.agentstatus-bak';
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 const LOGGER = join(HOOKS_DIR, 'log-events.sh');
 
@@ -66,7 +66,7 @@ if (cmd === 'install') {
     if (Object.keys(s.hooks).length === 0) delete s.hooks;
   }
   save(s);
-  console.log(`Removed ClaudeStatus logger entries from ${SETTINGS}`);
+  console.log(`Removed AgentStatus logger entries from ${SETTINGS}`);
 } else {
   const s = load();
   const events = s.hooks

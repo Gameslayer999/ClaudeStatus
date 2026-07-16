@@ -1,4 +1,4 @@
-/* ClaudeStatus — floating light bar. Transparent window; the pill is drawn here. */
+/* AgentStatus — floating light bar. Transparent window; the pill is drawn here. */
 
 html,
 body {
@@ -24,6 +24,18 @@ body {
   --c-idle: #7f8c8d;
   --c-error: #e74c3c;
 
+  /* One considered UI accent for the settings panel (active toggles, slider thumb,
+     focus rings). Deliberately blue-family — the only hue that doesn't collide with
+     any of the five state colors above — but a hand-picked OKLCH indigo, not the
+     stock #3b82f6 Tailwind default. Panel neutrals below are tinted toward the same
+     cool hue (262) as the pill fill so the surface reads as one material, not
+     white-on-black. */
+  --ui-accent: oklch(60% 0.15 262);
+  --ui-accent-ink: oklch(98% 0.01 262);
+  --ui-ink: oklch(96% 0.008 262); /* panel text/values */
+  --ui-muted: oklch(96% 0.008 262 / 0.6); /* labels — recede under the values */
+  --ui-line: oklch(96% 0.008 262 / 0.13); /* dividers, control borders */
+
   position: fixed;
   top: 0;
   left: 0;
@@ -32,20 +44,36 @@ body {
   align-items: center;
   gap: 9px;
   padding: var(--bar-pad) calc(var(--bar-pad) + 4px);
-  /* Fill, border, shadow, and blur all fade together with --bar-opacity so the
-     whole pill gets more/less transparent — not just the fill (which is a small
-     fraction of the visible chrome when the bar is minimized to a few lights). The
-     multipliers are normalized so the default 0.82 reproduces the original values
-     (0.09 border / 0.38 shadow / 14px blur); at 0 the pill vanishes and only the
-     lights float. The lights are separate, fully-opaque elements, so the signal
-     never fades. */
+  border-radius: 999px;
+  /* The drop shadow lives on #bar (not #pill) because #pill is clipped to its own
+     shape with clip-path, which would clip the outer shadow away. A box-shadow
+     follows #bar's border-radius, so it stays a rounded shadow with no leak. */
+  box-shadow: 0 4px 18px rgba(0, 0, 0, calc(var(--bar-opacity) * 0.46));
+  cursor: grab;
+}
+/* The visible frosted pill, drawn as a layer behind the lights (negative z-index)
+   rather than as #bar's own background — so the backdrop blur can be clipped to the
+   pill shape without also clipping the subagent badges and dot hover-scale that
+   intentionally spill outside it. WebKit does NOT clip backdrop-filter to an
+   ancestor's border-radius/overflow (that leaks a faint rectangle on light
+   backgrounds), but it DOES honor clip-path on the filtered element itself, so the
+   pill is clipped with `inset(... round)`. Fill, border, shadow, and blur all fade
+   together with --bar-opacity; the lights are separate opaque elements, so the
+   signal never fades. Multipliers reproduce the original 0.82 look (0.09 border /
+   0.38 shadow / 14px blur); at 0 the pill vanishes and only the lights float. */
+#pill {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
   background: rgba(20, 22, 26, var(--bar-opacity));
   border: 1px solid rgba(255, 255, 255, calc(var(--bar-opacity) * 0.11));
-  border-radius: 999px;
-  box-shadow: 0 4px 18px rgba(0, 0, 0, calc(var(--bar-opacity) * 0.46));
+  border-radius: inherit; /* tracks #bar (stadium, or 15px when settings-open) */
   backdrop-filter: blur(calc(var(--bar-opacity) * 17px));
   -webkit-backdrop-filter: blur(calc(var(--bar-opacity) * 17px));
-  cursor: grab;
+  /* Clamp the blur to the stadium. 999px clamps to a half-height radius; the tall
+     settings panel overrides this to match its 15px corners. */
+  clip-path: inset(0 round 999px);
+  pointer-events: none; /* dragging/clicks belong to #bar and the lights */
 }
 #bar:active {
   cursor: grabbing;
@@ -54,6 +82,11 @@ body {
    radius on a tall box looks wrong. */
 #bar.settings-open {
   border-radius: 15px;
+}
+/* border-radius: inherit tracks the panel shape, but clip-path is a fixed value and
+   must be switched to match the 15px corners. */
+#bar.settings-open #pill {
+  clip-path: inset(0 round 15px);
 }
 /* Grow the panel ABOVE the lights (when the bar sits in the bottom half of the
    screen). DOM order is lights → settings; column-reverse renders settings on top
@@ -99,15 +132,21 @@ body {
   height: 13px;
   padding: 0 3px;
   border-radius: 7px;
-  background: #3b82f6;
-  color: #fff;
+  background: var(--ui-accent);
+  color: var(--ui-accent-ink);
   font: 700 9px/13px -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
   text-align: center;
   box-shadow: 0 0 0 1.5px rgba(20, 22, 26, 0.92);
   pointer-events: none;
 }
 .dot:hover {
   transform: scale(1.18);
+}
+/* Clicking a light focuses another app's window, so we never get the mouseleave
+   and :hover stays latched on the dot. Suppressed until the next real mousemove. */
+#bar.nohover .dot:hover {
+  transform: none;
 }
 .dot.empty {
   cursor: grab;
@@ -175,12 +214,12 @@ body {
   gap: 8px;
   width: 100%;
   font: 500 11px/1.2 -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-  color: rgba(255, 255, 255, 0.82);
+  color: var(--ui-ink);
 }
 
 #settings .sep {
   height: 1px;
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--ui-line);
 }
 
 #settings .row {
@@ -197,12 +236,13 @@ body {
 }
 #settings .row-label {
   white-space: nowrap;
+  color: var(--ui-muted); /* labels recede; the control/value is the figure */
 }
 
 /* Segmented horizontal/vertical toggle. */
 .seg {
   display: inline-flex;
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  border: 1px solid var(--ui-line);
   border-radius: 7px;
   overflow: hidden;
 }
@@ -212,19 +252,19 @@ body {
   margin: 0;
   padding: 4px 9px;
   background: transparent;
-  color: rgba(255, 255, 255, 0.7);
+  color: var(--ui-muted);
   font: inherit;
   cursor: pointer;
 }
 .seg button + button {
-  border-left: 1px solid rgba(255, 255, 255, 0.14);
+  border-left: 1px solid var(--ui-line);
 }
 .seg button:hover {
-  background: rgba(255, 255, 255, 0.07);
+  background: oklch(96% 0.008 262 / 0.08);
 }
 .seg button.active {
-  background: #3b82f6;
-  color: #fff;
+  background: var(--ui-accent);
+  color: var(--ui-accent-ink);
 }
 
 /* Size + padding + opacity sliders. */
@@ -232,8 +272,17 @@ body {
 #pad-range,
 #opacity-range {
   width: 96px;
-  accent-color: #3b82f6;
+  accent-color: var(--ui-accent);
   cursor: pointer;
+}
+
+/* Keyboard focus: an instant accent ring on every control (Hallmark: focus rings
+   appear instantly, never transition in). No effect on mouse use — :focus-visible
+   only fires for keyboard traversal, which the panel had no indicator for before. */
+#settings :is(.seg button, input, button):focus-visible {
+  outline: 2px solid var(--ui-accent);
+  outline-offset: 1px;
+  border-radius: 4px;
 }
 
 /* Color rows: a native swatch per state, labeled. */
@@ -252,7 +301,7 @@ body {
   width: 22px;
   height: 16px;
   padding: 0;
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  border: 1px solid var(--ui-line);
   border-radius: 4px;
   background: none;
   cursor: pointer;
@@ -278,14 +327,14 @@ body {
   border: none;
   padding: 2px 0;
   background: none;
-  color: rgba(255, 255, 255, 0.55);
+  color: var(--ui-muted);
   font: inherit;
   text-decoration: underline;
   cursor: pointer;
 }
 #reload-btn:hover,
 #reset-btn:hover {
-  color: rgba(255, 255, 255, 0.85);
+  color: var(--ui-ink);
 }
 #quit-btn:hover {
   color: rgba(255, 120, 120, 0.95);

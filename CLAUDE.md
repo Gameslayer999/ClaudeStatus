@@ -1,4 +1,4 @@
-# CLAUDE.md — ClaudeStatus Onboarding Guide
+# CLAUDE.md — AgentStatus Onboarding Guide
 
 > Read this file completely before taking any action on this project.
 > This file is the single source of truth for any new agent continuing development.
@@ -7,7 +7,7 @@
 
 ## Project Overview
 
-**ClaudeStatus** is a lightweight, always-on-top status bar that shows the live state of
+**AgentStatus** is a lightweight, always-on-top status bar that shows the live state of
 every open Claude Code session as a small row of colored lights the user can position
 anywhere on screen. Each light corresponds to one Claude Code session (one VS Code tab):
 
@@ -138,7 +138,7 @@ and reassess, not to proceed.
 
 ## UI Design Principles
 
-These rules apply to the ClaudeStatus display — the light bar itself and any settings
+These rules apply to the AgentStatus display — the light bar itself and any settings
 surface it grows.
 
 1. **Glanceable in under a second.** The entire value is reading state at a glance. Colors

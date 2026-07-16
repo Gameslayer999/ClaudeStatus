@@ -23,23 +23,27 @@
 | 010 | 2026-07-05 | Subagent storage: one marker file per subagent (`sessions/<id>.subagents/<agent_id>`), not a field in the session JSON — parallel subagents were racing the shared file | Accepted |
 | 011 | 2026-07-05 | Packaging: self-installing app — bundles the hook (`include_str!`), writes it to `~/.claude/status/report.sh` and registers it on launch (release builds only); ships `.app` + `.dmg` + `install.sh` | Accepted |
 | 012 | 2026-07-05 | VS Code extension: per-window status-bar items (scoped to the window's workspace); click-to-focus via Claude Code's own `claude-vscode.editor.open` command (no URI-consent prompt) | Accepted |
-| 013 | 2026-07-06 | Red = `StopFailure` only (not `PostToolUseFailure`, which is recovered-tool-failure noise); `CLAUDESTATUS_IGNORE` env var opts a session out of tracking (for programmatic/headless Claude calls) | Accepted |
+| 013 | 2026-07-06 | Red = `StopFailure` only (not `PostToolUseFailure`, which is recovered-tool-failure noise); `AGENTSTATUS_IGNORE` env var opts a session out of tracking (for programmatic/headless Claude calls) | Accepted |
 | 014 | 2026-07-06 | Split idle into **done** (finished turn, unreviewed — steady white light) vs **idle** (acknowledged — dim gray); `reviewed` flag is app-local, cleared by clicking the light (which also focuses the session), reset by the next finished turn | Accepted |
 | 015 | 2026-07-06 | Settings panel: right-click the bar toggles an inline panel (not a gear icon / separate window); first setting = orientation (horizontal/vertical) via a `.vertical` CSS class + existing auto-resize; persisted in webview `localStorage`, frontend-only | Accepted |
 | 016 | 2026-07-06 | Bar click-to-focus via the IDE's own CLI (`code`/`cursor <root>`), not `open -a <folder>` — `open -a` spawns a new window when the target is a full-screen window on another Space; workspace root resolved from `~/.claude/ide/*.lock` so subfolder `cwd`s map to the right window. AppleScript window-raise rejected (can't see full-screen windows on inactive Spaces) | Accepted |
 | 017 | 2026-07-06 | Settings: light **size** (slider) + **per-state colors** (native `<input type=color>`), driven by CSS variables on `#bar` from `localStorage`; glow derived via `color-mix`. Plus `keepOnScreen()` — after each resize, shift the window inward if it overflows a monitor edge, so the panel opens "toward the middle." Frontend-only | Accepted |
 | 018 | 2026-07-06 | Cursor support: Cursor natively runs `report.sh` via its Claude-compat bridge (reads `~/.claude/settings.json`), so running/idle/error/remove work for free; native `~/.cursor/hooks.json` entries add the events the bridge drops (`subagentStart/Stop`, `postToolUseFailure`). New `ide` field (`cursor` when `.cursor_version` present, else `vscode`) drives per-IDE click-to-focus; Cursor cwd = `workspace_roots[0]`; blocked is unavailable on Cursor (no event) | Accepted |
 | 019 | 2026-07-06 | Click a bar light → focus the exact **session tab** (not just its window) via a bar→extension relay: the bar writes `~/.claude/status/focus-request.json` `{session_id, requested_at}`; the per-window extension polls it and calls the popup-free in-editor `claude-vscode.editor.open`. Chosen over the `vscode://…open?session=` deep link, which shows a consent popup on every click (verified live). Complements decision 016's window-raise. Verified end-to-end (bar click from another window → correct tab) | Accepted |
-| 020 | 2026-07-06 | Single-instance guard via `tauri-plugin-single-instance` (release only): a second launch — installed copy or dev build, both keyed by `com.claudestatus.app` — pings the running instance and exits instead of drawing a duplicate overlapping bar. Off in dev so `tauri dev` runs alongside the installed copy | Accepted |
+| 020 | 2026-07-06 | Single-instance guard via `tauri-plugin-single-instance` (release only): a second launch — installed copy or dev build, both keyed by `com.agentstatus.app` — pings the running instance and exits instead of drawing a duplicate overlapping bar. Off in dev so `tauri dev` runs alongside the installed copy | Accepted |
 | 021 | 2026-07-06 | Faster click-to-focus: fire a fast `osascript` System Events window-raise (`set frontmost` + AXRaise by workspace-root basename, ~0.2s) **in addition to** the decision-016 IDE CLI (~1.1s). Fast path handles the same-Space case; CLI still covers cross-Space / full-screen. Needs a one-time Accessibility grant; silently no-ops (falls back to CLI) without it | Accepted |
 | 022 | 2026-07-06 | Persist bar position across restarts/rebuilds in `localStorage` (frontend-only, no window-state plugin), restored on launch over the config's `center: true`; drag bounded to the union of all monitors with soft edge magnetism; a user-facing **Reload** button in the settings panel; `install.sh` auto-quits+relaunches an already-running instance so rebuilds take effect past the single-instance guard | Accepted |
 | 023 | 2026-07-06 | Settings: bar **opacity** slider (0–100%) drives a `--bar-opacity` CSS variable on `#bar` that fades the whole pill together — fill, border, shadow, and backdrop-blur (multipliers normalized so 82% reproduces the original look) — while the lights stay fully opaque so the signal never fades; at 0% the pill vanishes and only the lights float. Fading the chrome (not just the fill) makes the control perceptible when the bar is minimized to a few lights. Persisted in `localStorage` as a whole percent, frontend-only, same pattern as decision 017 size/padding | Accepted |
-| 024 | 2026-07-06 | First public release **v0.1.0**: a git tag + GitHub Release with the prebuilt **Apple-Silicon-only, unsigned** `ClaudeStatus_0.1.0_aarch64.dmg` as the primary install path (build-from-source via `install.sh` kept for Intel/devs). Unsigned/unnotarized → users clear quarantine (`xattr -dr com.apple.quarantine`) or "Open Anyway"; README rewritten to lead with the DMG download and macOS-15+ Gatekeeper steps | Accepted |
-| 025 | 2026-07-06 | Settings: light **sort** toggle — **Window** (group sessions by workspace folder, default) vs **Urgency** (attention states first). "Window" is proxied by the session `cwd` (hooks expose no true per-window id — #006), so two windows on the same folder merge (accepted limit). Frontend-only sort in `localStorage` (`claudestatus.sort`), same pattern as orientation | Accepted |
+| 024 | 2026-07-06 | First public release **v0.1.0**: a git tag + GitHub Release with the prebuilt **Apple-Silicon-only, unsigned** `AgentStatus_0.1.0_aarch64.dmg` as the primary install path (build-from-source via `install.sh` kept for Intel/devs). Unsigned/unnotarized → users clear quarantine (`xattr -dr com.apple.quarantine`) or "Open Anyway"; README rewritten to lead with the DMG download and macOS-15+ Gatekeeper steps | Accepted |
+| 025 | 2026-07-06 | Settings: light **sort** toggle — **Window** (group sessions by workspace folder, default) vs **Urgency** (attention states first). "Window" is proxied by the session `cwd` (hooks expose no true per-window id — #006), so two windows on the same folder merge (accepted limit). Frontend-only sort in `localStorage` (`agentstatus.sort`), same pattern as orientation | Accepted |
 | 027 | 2026-07-07 | Stale-light fix: prune a session the instant its IDE window is gone, not just after the 2h idle timer. `list_sessions` builds the set of live workspace folders from `~/.claude/ide/*.lock` (skipping locks whose owning `pid` is dead — force-quit/crash), and deletes any session whose `cwd` maps to no live folder (empty cwd = anonymous ghost, matches nothing). Purely additive — the `MAX_IDLE_SECS=2h` backstop (#004) is unchanged and still covers a superseded session sharing a live window's lock. Caveat: a Claude session in a standalone terminal (no IDE lock) is pruned when any IDE is open; skipped entirely when no live lock exists so a no-IDE machine / bad read never nukes every light | Accepted |
 | 028 | 2026-07-07 | Settings: a **Quit** button in the panel footer that calls a new `quit_app` Tauri command (`app.exit(0)`). As an Accessory app (no Dock icon, no app menu) the bar had no in-UI way to quit — only Activity Monitor / `kill`. Red-tinted hover marks it as the one destructive footer action; hooks keep writing status files, so relaunching repopulates the bar | Accepted |
 | 026 | 2026-07-06 | Presentation-mode toggle: the bar runs **floating** (the NSPanel, default) **or in the macOS menu bar** — a `tray-icon` NSStatusItem drawn from a webview-rendered dot image (with a condense-to-single-summary-dot option), clicked to reveal the same panel as a popover below it. Amends #003 (menu bar is now an optional mode, not rejected). Settings-panel toggle, `localStorage`-persisted; menu-bar mode forces horizontal; tray ops marshaled to the main thread; icon forced non-template so the dots keep their colors | Accepted |
 | 029 | 2026-07-09 | Codex compatibility: install the shared `report.sh` into Codex user hooks at `~/.codex/hooks.json` alongside Claude's `~/.claude/settings.json`, using only Codex-supported events from the official Codex Hooks manual. The reporter accepts Codex thread/conversation id fields, falls back to the hook process cwd, tags sessions as `ide:"codex"`, and skips IDE-lock pruning for them; click-to-focus opens `Codex.app` | Accepted |
+| 030 | 2026-07-09 | Product rename: `ClaudeStatus` → `AgentStatus` now that the bar targets Claude Code, Codex, and Cursor rather than only Claude Code. App bundle, product name, docs, extension IDs, localStorage keys, hook backup suffixes, and release asset names move to AgentStatus; legacy `CLAUDESTATUS_DIR` / `CLAUDESTATUS_IGNORE` and old `/Applications/ClaudeStatus.app` cleanup remain for migration | Accepted |
+| 031 | 2026-07-09 | Codex live-state fallback: if Codex lifecycle hooks are not yet trusted/loaded for an already-running thread, synthesize Codex lights from `~/.codex/state_5.sqlite` (`threads.updated_at`) so active Codex work shows green. Also prune status files whose `cwd` no longer exists, which removes rename ghosts like the old `ClaudeStatus` workspace | Accepted |
+| 032 | 2026-07-09 | Codex open/close lifecycle: Codex emits **no** signal on conversation open or close (verified: no `SessionEnd` hook exists; `SessionStart` is deferred to the first turn; `updated_at`/`recency_at` advance only on turn starts). So: installers pass an explicit `codex` arg to `report.sh` (payloads are Claude-shaped and unsniffable — replaces the never-firing #029 heuristics); Codex lights expire after 10 min idle (`CODEX_IDLE_SECS`, user-approved) instead of 2h, drop instantly when no `codex` process is alive, and exclude archived threads; click-to-focus targets the VS Code window (Codex is the `openai.chatgpt` extension; `open -a Codex` was a no-op) | Accepted |
+| 033 | 2026-07-15 | Antigravity IDE as a fourth host (retroactive — shipped in 3195f11 undocumented). Hooks install into `~/.gemini/config/hooks.json` under an `agentstatus` object key (not Claude's `hooks` map), registering `PreInvocation`/`PreToolUse`/`PostToolUse`/`Stop` as `report.sh <Event> antigravity` — declared host per #032. Payload differs from Claude: workspace in `workspacePaths[]`, tools in `toolCall.name`/`toolCall.args`, and **no prompt text**, so the task label is recovered from the thread transcript and unwrapped from `<USER_REQUEST>`. That transcript read is gated on `ide == antigravity`: ungated it walked its fallback chain into the real Claude transcript on every `UserPromptSubmit` (~98 ms + a 10 MB read per turn, discarded). Antigravity uses IDE-lock pruning and the 2h idle backstop like vscode/cursor; click-to-focus targets `Antigravity IDE.app`. **Hook events not yet verified against a live install (Guideline #4)** | Accepted, unverified |
 
 ---
 
@@ -187,7 +191,7 @@ not a parallel implementation.
 **Date:** 2026-07-05
 **Status:** Accepted
 **Evidence:** Claude Code **2.1.201** (VS Code extension), observed live via the temporary
-broad logger across the ClaudeStatus + ApplicationBot windows (`logs/events.log`).
+broad logger across the AgentStatus + ApplicationBot windows (`logs/events.log`).
 
 **Context:** Decision 001 planned the event→state mapping from docs, flagged as
 version-dependent and requiring confirmation (Agent Guideline #4). Milestone 1 ran a logger
@@ -267,7 +271,7 @@ and torn reads. Safe concurrent writes would need a mutex, and macOS ships no `f
 | **One file per session** `sessions/<id>.json` | Each hook writes only its own file → zero cross-session contention; `SessionEnd` = delete the file; stale cleanup = delete old files; atomic per-file write via temp+rename | App reads N small files instead of 1 (trivial); no single-read snapshot (fine for a status light) |
 
 **Decision:** Store one JSON file per session at `~/.claude/status/sessions/<session_id>.json`
-(overridable via `$CLAUDESTATUS_DIR`). Each hook writes only its own session's file
+(overridable via `$AGENTSTATUS_DIR`). Each hook writes only its own session's file
 (temp-file + atomic rename); `SessionEnd` deletes it. The display app watches the `sessions/`
 directory. Same object shape as #002 (`state`, `cwd`, `label`, `updated_at`).
 
@@ -389,7 +393,7 @@ down. Verified: 8 concurrent `SubagentStart` for one session produced 8 markers 
 **Status:** Accepted
 
 **Context:** Decision 005 chose a self-installing app so install is one action and covers
-every project/window. Milestone 5 delivers it: a real `ClaudeStatus.app` (built with
+every project/window. Milestone 5 delivers it: a real `AgentStatus.app` (built with
 `tauri build`) that wires up its own hooks with no node/repo dependency.
 
 **Decision & mechanism:**
@@ -400,7 +404,7 @@ every project/window. Milestone 5 delivers it: a real `ClaudeStatus.app` (built 
   `#[cfg(not(debug_assertions))]`), the app writes the script to a stable, app-independent
   path `~/.claude/status/report.sh`, creates `sessions/`, and merges the 11 hook entries into
   `~/.claude/settings.json` — idempotent (dedup by the `report.sh` marker), reversible
-  (one-time `settings.json.claudestatus-bak`), non-clobbering (leaves other settings/hooks).
+  (one-time `settings.json.agentstatus-bak`), non-clobbering (leaves other settings/hooks).
   This is the `setup.mjs` logic ported to Rust (serde_json).
 - **Dev vs release split:** dev builds do **not** self-install, so `hooks/report.sh` edits
   stay live without a rebuild (dev registers the repo path via `node hooks/setup.mjs`); the
@@ -450,7 +454,7 @@ item appears for that window's session with correct color/hover, and that clicki
 session's tab with no consent prompt. (Testing requires reloading a window, which restarts the
 extension host — never the window running the active session.)
 
-## 013 — Red = StopFailure only; CLAUDESTATUS_IGNORE opt-out
+## 013 — Red = StopFailure only; AGENTSTATUS_IGNORE opt-out
 
 **Date:** 2026-07-06
 **Status:** Accepted (refines #006 error signal; adds an opt-out)
@@ -477,9 +481,9 @@ new lights.
 - **Red = `StopFailure` only.** `PostToolUseFailure` no longer flips state; it's still written
   to `~/.claude/status/calibration.log` for observation. `StopFailure` sets `error` and a
   `detail` of "⚠ turn failed — <error_type>", which persists until the next prompt.
-- **`CLAUDESTATUS_IGNORE` opt-out.** If that env var is set in a session's environment,
+- **`AGENTSTATUS_IGNORE` opt-out.** If that env var is set in a session's environment,
   `report.sh` exits immediately and never tracks it. Programmatic/headless spawners (e.g.
-  ApplicationBot) set `CLAUDESTATUS_IGNORE=1` when invoking `claude`. Chosen over a grace
+  ApplicationBot) set `AGENTSTATUS_IGNORE=1` when invoking `claude`. Chosen over a grace
   period (auto but fuzzy: delays real sessions, still shows long programmatic ones) because
   the spawner controls its own env and this is 100% reliable with zero false positives.
 
@@ -489,11 +493,11 @@ bundled copy. All four were updated (live `cp`, app rebuilt + reinstalled + rela
 extension repackaged) so a future app launch or fresh install can't revert the change.
 
 **Validation:** unit-tested — `PostToolUseFailure` keeps state `running` (calibration-logged),
-`StopFailure` → `error`, `CLAUDESTATUS_IGNORE=1` writes no file. Red rendering confirmed via an
+`StopFailure` → `error`, `AGENTSTATUS_IGNORE=1` writes no file. Red rendering confirmed via an
 injected `state:error` session (the user saw the red light).
 
 **Known minor follow-up:** the light's label is the session's `cwd` basename, so `cd`-ing into
-a subfolder relabels it (e.g. "app" instead of "ClaudeStatus"). Could map `cwd`→workspace root
+a subfolder relabels it (e.g. "app" instead of "AgentStatus"). Could map `cwd`→workspace root
 via the IDE lock files; deferred.
 
 ## 014 — Split idle into "done" (unreviewed) vs "idle" (reviewed)
@@ -578,7 +582,7 @@ auto-resize (`resizeToContent`) then reshapes the window with no other geometry 
 so orientation is one CSS class plus the resize that already runs.
 
 **Persistence.** The choice is stored in the webview's `localStorage`
-(`claudestatus.orientation`), read on load. This is an app-local *display* preference, so it
+(`agentstatus.orientation`), read on load. This is an app-local *display* preference, so it
 stays out of the hook-written status files entirely — same principle as the app-local
 `reviewedAt` map (decision 014), and it survives restarts without a config file or Rust
 plumbing. Window *position* is still handled by `tauri-plugin-window-state`; this is
@@ -616,7 +620,7 @@ already-open window — and a **full-screen** IDE window living in its own macOS
 - **The deep link** `vscode://…/open?session=<id>` stays rejected: the Claude Code URI handler
   routes through `createSession`/`resumeSession` (confirmed by reading its `webview/index.js`),
   so it can spawn/resume rather than just focus, plus a URI-consent prompt.
-- **The IDE's own CLI focuses without duplicating** — verified: with the ClaudeStatus folder
+- **The IDE's own CLI focuses without duplicating** — verified: with the AgentStatus folder
   already open, `code <folder>` kept the standard-window count at 2 (focused, no new window).
   Because the IDE manages its own window, the focus is Space-aware (Electron `focus()` switches
   to a full-screen Space), with no Accessibility permission.
@@ -661,7 +665,7 @@ color via `color-mix(in srgb, var(--c-x) N%, transparent)` instead of a separate
 `rgba()`, so editing one color updates both the fill and its halo. The settings panel writes
 these variables at runtime from `localStorage` — same app-local, frontend-only pattern as
 orientation; defaults mirror the CSS so a cleared/absent pref is indistinguishable from the
-stock bar. Storage: `claudestatus.dotsize` (int px, clamped 8–24) and `claudestatus.colors`
+stock bar. Storage: `agentstatus.dotsize` (int px, clamped 8–24) and `agentstatus.colors`
 (JSON `state→hex`). Size is a range slider; colors are five native `<input type="color">`
 swatches; a "Reset to defaults" clears all three display prefs (orientation included).
 
@@ -792,7 +796,7 @@ them to the *associated agent*.
 
 **The capability gap.** Focusing a specific session *tab* is done by the in-editor command
 `claude-vscode.editor.open <session_id>` — which only code running *inside* VS Code can call.
-The ClaudeStatus **extension** already uses it for its own status-bar clicks (decision 012),
+The AgentStatus **extension** already uses it for its own status-bar clicks (decision 012),
 popup-free. The floating **bar** is a separate process and can't call it; its only external
 lever is the deep link `vscode://anthropic.claude-code/open?session=<id>`.
 
@@ -837,8 +841,8 @@ in `activate`). No hook or per-session schema change.
 
 ## 020 — Single-instance guard (release only)
 
-**Context.** Two bars were found running at once: the installed `/Applications/ClaudeStatus.app`
-and the in-repo dev build (`app/src-tauri/target/release/…/ClaudeStatus.app`), launched minutes
+**Context.** Two bars were found running at once: the installed `/Applications/AgentStatus.app`
+and the in-repo dev build (`app/src-tauri/target/release/…/AgentStatus.app`), launched minutes
 apart. Both read the same `~/.claude/status/sessions/` dir and drew identical, overlapping bars.
 Nothing detected or blocked a second copy — `run()` built the Tauri app with no instance guard,
 so any number of copies could run.
@@ -850,12 +854,12 @@ a Login Item) is up and a dev build is launched during development — the exact
 
 | Option | Mechanism | Cost |
 |---|---|---|
-| A — `tauri-plugin-single-instance` | Second launch pings the running instance (keyed by the `com.claudestatus.app` identifier) and exits; a callback in the survivor re-shows its window | 1 dep + ~10 lines |
+| A — `tauri-plugin-single-instance` | Second launch pings the running instance (keyed by the `com.agentstatus.app` identifier) and exits; a callback in the survivor re-shows its window | 1 dep + ~10 lines |
 | B — hand-rolled PID/lock file | Own lockfile check on startup | Reinvents A; stale-lock edge cases |
 | C — do nothing / kill dupes by hand | Discipline only | Recurs; contradicts "self-installing, no manual steps" |
 
 **Decision — Option A.** Register `tauri-plugin-single-instance` as the first plugin in `run()`.
-Because both bundles share the identifier `com.claudestatus.app`, the plugin catches the
+Because both bundles share the identifier `com.agentstatus.app`, the plugin catches the
 installed copy *and* any dev build. The second process exits immediately; the callback re-shows
 the survivor's `main` window.
 
@@ -937,7 +941,7 @@ instance would just exit, leaving stale code on screen.
   on panel state; persisting it and restoring onto a differently-sized window shifts the lights
   (concretely: the Reload button lives *in* the panel, so a reload always saved the panel-open
   top-left then restored it onto the panel-closed window → the bar jumped). Fix: `onWindowMoved`
-  saves `lightsScreenPos()` (`{x,y,scale}`, `claudestatus.pos`) on each move, and `restoreAnchor()`
+  saves `lightsScreenPos()` (`{x,y,scale}`, `agentstatus.pos`) on each move, and `restoreAnchor()`
   on launch sizes the bar then `anchorLightsTo(saved)` to land the lights back on that screen point
   (over `center: true`), re-validating on-screen via `clampToMonitor`. An `anchorReady` flag
   suppresses saving during startup layout so involuntary `setSize` moves don't clobber the saved
@@ -1025,14 +1029,14 @@ how a user obtains and trusts the app), so it's logged here per Agent Guideline 
 **Decision:**
 
 - **Tag `v0.1.0`** (matches `tauri.conf.json` / `package.json`) and cut a **GitHub Release**
-  with **`ClaudeStatus_0.1.0_aarch64.dmg`** attached, rebuilt fresh from the tagged commit.
+  with **`AgentStatus_0.1.0_aarch64.dmg`** attached, rebuilt fresh from the tagged commit.
 - **Apple Silicon only** for this release (decision at the user's direction). Intel users
   build from source via `install.sh`; a universal binary is a future enhancement (needs the
   `x86_64-apple-darwin` target + a lipo'd build, and the Intel slice would be untested).
 - **Unsigned / unnotarized.** No Apple Developer signing yet, so a downloaded app carries
   `com.apple.quarantine` and macOS 15+/26 blocks it (the old Finder right-click → Open bypass
   was removed for downloaded apps). The README documents the two ways past it:
-  `xattr -dr com.apple.quarantine /Applications/ClaudeStatus.app`, or **System Settings →
+  `xattr -dr com.apple.quarantine /Applications/AgentStatus.app`, or **System Settings →
   Privacy & Security → Open Anyway**. Code signing + notarization is deferred (Milestone-5
   note) — it costs a paid Developer account and only removes friction, not capability.
 - **README rewritten** to lead with the DMG download as the primary install path and keep
@@ -1067,7 +1071,7 @@ subfolder sorted away from its window's siblings, and two different folders shar
 
 **Decision & mechanism (frontend only, `app/src/`).**
 - New **Sort** segmented control in the settings panel with two modes, persisted app-local in
-  `localStorage` (`claudestatus.sort`) — same pattern as orientation/size/colors, no hook or
+  `localStorage` (`agentstatus.sort`) — same pattern as orientation/size/colors, no hook or
   status-file schema change:
   - **Window** (default) — `sortSessions` orders by the full `cwd` path, then `id`. The full
     path fixes both flaws above: same-basename windows stay distinct, and lexicographic order
@@ -1124,7 +1128,7 @@ shape keeps all of it:
   click hides it). Because it's the *same* NSPanel, per-light focus/hover/badges all work
   unchanged.
 - **Toggle in the settings panel** (`Mode: Floating | Menu bar`), `localStorage`-persisted
-  (`claudestatus.mode`, `claudestatus.menubarcondense`) — same app-local pattern as every other
+  (`agentstatus.mode`, `agentstatus.menubarcondense`) — same app-local pattern as every other
   display pref; no hook/schema change.
 
 **Menu-bar mode forces horizontal** (`effectiveOrientation()`): a vertical column hanging off
@@ -1228,7 +1232,7 @@ event-mapping change.
 module, since removed): the shipped `cwd_is_live`/`live_workspace_folders`/`pid_alive`
 correctly flagged both empty-`cwd` Cursor ghosts `window_gone=true` (pruned) while keeping all
 three real sessions — including one whose `cwd` was the `app/src-tauri` subfolder, matched back
-to the open ClaudeStatus window by the prefix rule — and did not false-match a
+to the open AgentStatus window by the prefix rule — and did not false-match a
 `TradingBotXtra` prefix. **Left to confirm with the user:** rebuild + reinstall the app (the
 running installed copy predates this change), then close an IDE window and watch its light
 vanish within one poll.
@@ -1237,7 +1241,7 @@ vanish within one poll.
 
 ### Decision 028 — Quit button in the settings panel
 
-**Context.** ClaudeStatus runs as a macOS **Accessory** app (`ActivationPolicy::Accessory`)
+**Context.** AgentStatus runs as a macOS **Accessory** app (`ActivationPolicy::Accessory`)
 so it has no Dock icon and no application menu — the two places macOS normally puts a Quit
 command. Until now the only way to stop the bar was Activity Monitor, `kill`, or (in menu-bar
 mode) nothing at all. Users need an obvious in-UI way out.
@@ -1265,7 +1269,7 @@ event-mapping change. `cargo check` clean.
 **Date:** 2026-07-09
 **Status:** Accepted
 
-**Context.** ClaudeStatus already had a shared status hook for Claude Code and Cursor, but
+**Context.** AgentStatus already had a shared status hook for Claude Code and Cursor, but
 Codex reads user-level hooks from `~/.codex/hooks.json` or inline `[hooks]` in
 `~/.codex/config.toml`, not `~/.claude/settings.json`. The official Codex Hooks manual
 (fetched 2026-07-09) also has a slightly different supported event set: no `SessionEnd`,
@@ -1290,3 +1294,177 @@ documented external open-by-thread command analogous to the VS Code extension re
 `node --check hooks/setup.mjs`, `cargo check`, and temp-dir smoke tests that wrote Codex-shaped
 session JSON with `ide:"codex"`, cwd from the process directory, and expected running/detail
 fields.
+
+---
+
+## 030 — Product rename: AgentStatus
+
+**Date:** 2026-07-09
+**Status:** Accepted
+
+**Context.** After Codex support (#029), the name `ClaudeStatus` no longer described the product:
+the same lightbar now tracks Claude Code, Codex, and Cursor sessions. Keeping the old name would
+make install docs, release assets, and user-facing app chrome misleading.
+
+**Decision.** Rename the product to **AgentStatus** across the app, installer, docs, extension
+metadata, Tauri product name/window title, bundle identifier (`com.agentstatus.app`), tray id,
+localStorage keys, hook backup suffixes, and release asset names.
+
+**Migration.** Keep compatibility where an existing user may already have runtime state:
+`AGENTSTATUS_DIR` is the new status-dir override, but `CLAUDESTATUS_DIR` remains a legacy alias;
+`AGENTSTATUS_IGNORE` is the new opt-out, but `CLAUDESTATUS_IGNORE` still works. The installer also
+removes and stops an old `/Applications/ClaudeStatus.app` while installing `/Applications/AgentStatus.app`.
+
+---
+
+## 031 — Codex live-state fallback
+
+**Date:** 2026-07-09
+**Status:** Accepted
+
+**Context.** During the AgentStatus rename work, the visible light for this active Codex thread
+stayed gray. Investigation showed the status directory had only an old idle file from the deleted
+`/Users/gabrielchan/Documents/code/ClaudeStatus` path, while the current Codex thread was actively
+updating `~/.codex/state_5.sqlite`. No hook-written status files were being refreshed for the
+already-running thread, likely because hooks need to be loaded/trusted at thread startup.
+
+**Decision.** Keep lifecycle hooks as the primary signal, but add a best-effort Codex fallback in
+`list_sessions`: query `~/.codex/state_5.sqlite` with `/usr/bin/sqlite3`, read recent
+`threads.updated_at` rows, and synthesize `ide:"codex"` sessions when no hook status file exists
+for that thread. A thread updated in the last 20 seconds renders `running`; otherwise it renders
+`idle` until the normal 2h pruning window.
+
+**Stale-file cleanup.** Also prune hook-written status files whose non-empty `cwd` no longer
+exists. This removes renamed/deleted-folder ghosts immediately, including the old `ClaudeStatus`
+workspace file that was showing as gray after the repo moved to AgentStatus.
+
+---
+
+## 032 — Codex open/close lifecycle: declared host, short idle expiry, process-liveness pruning
+
+**Date:** 2026-07-09
+**Status:** Accepted
+
+**Context.** Opening/closing Codex conversations didn't affect the bar: a dot appeared only
+when a conversation's first prompt was sent, and closing a conversation left its dot for up
+to 2 hours. Investigation (against the installed `openai.chatgpt` VS Code extension binary
+26.623.141536 and the `openai/codex` source) established that Codex provides **no open/close
+signal anywhere**:
+
+- The binary's complete hook event set (`HookEventsToml`) is `PreToolUse, PermissionRequest,
+  PostToolUse, PreCompact, PostCompact, SessionStart, UserPromptSubmit, SubagentStart,
+  SubagentStop, Stop` — **no `SessionEnd`**, confirming #029's manual reading.
+- `SessionStart` hooks are deferred until the first turn (`run_pending_session_start_hooks`),
+  so no hook fires on conversation open. A dot at first prompt is the earliest Codex allows.
+- In `~/.codex/state_5.sqlite`, both `threads.updated_at` and `threads.recency_at` advance
+  only on `TurnStarted` (verified in `codex-rs/thread-store/src/thread_metadata_sync.rs`).
+  Opening or closing a conversation writes nothing to disk.
+
+Two AgentStatus bugs compounded this. (1) Codex hook payloads are Claude-shaped
+(`session_id` + `cwd` both present), so all three #029 `$isCodex` payload heuristics were
+dead code — live Codex sessions were tagged `ide:"vscode"` (observed on a real thread). The
+`cwd`-empty heuristic could even mis-tag a Claude payload. (2) The #031 fallback synthesized
+a dot for any thread updated in the last 2h, open or closed. Also, this machine's Codex is
+the VS Code extension — there is no `Codex.app`, so #029's click-to-focus (`open -a Codex`)
+silently did nothing.
+
+**Decision.**
+- **Declared host, not sniffed:** both installers (`hooks/setup.mjs`, app `install.rs`)
+  register Codex hooks as `report.sh <Event> codex`; `report.sh` takes the ide from arg 2
+  and the payload heuristics are removed.
+- **Short idle expiry (user-approved):** Codex lights (hook-written and synthesized) expire
+  after `CODEX_IDLE_SECS = 10 min` without turn activity, instead of `MAX_IDLE_SECS = 2h` —
+  a closed conversation can only expire by timeout, and a wrong light is worse than no light
+  (UI principle 4). An open-but-idle conversation's dot also fades and reappears on its next
+  turn. Alternatives offered: activity-only (~90s) dots, or keeping 2h with quit-only pruning.
+- **Process-liveness pruning:** if no `codex` process is alive (`pgrep -x codex` covers the
+  extension's `codex app-server` and the terminal TUI; fails open on pgrep errors), all Codex
+  lights drop immediately and their status files are deleted.
+- **Fallback hygiene:** the #031 synthesized query now also excludes `archived = 1` threads.
+- **Click-to-focus:** Codex lights focus the VS Code window holding the thread's workspace
+  (same `code` CLI path as `ide:"vscode"`); the Claude extension focus-relay request is
+  skipped since Codex sessions aren't Claude sessions. Lock-based window pruning still does
+  not apply to Codex (a terminal TUI session's cwd need not be open in any VS Code window).
+
+**Validation.** `bash -n`, `node --check`, `cargo check` clean; smoke tests against a temp
+status dir verified `report.sh <Event> codex` writes `ide:"codex"`, no-arg writes
+`ide:"vscode"`, Cursor detection is unchanged, and a Codex `Stop` (id-only payload) carries
+`cwd`/`ide` forward. Rebuilt and reinstalled via `./install.sh`; the app self-installer
+rewrote `~/.codex/hooks.json` with the `codex` arg.
+
+---
+
+## 033 — Antigravity IDE as a fourth host; host-gated transcript reads
+
+**Date:** 2026-07-15
+**Status:** Accepted, unverified against a live install
+
+**Context.** Support for Google's Antigravity IDE (the `~/.gemini` agent) shipped in commit
+`3195f11` without a decision entry, alongside the #032 Codex work. This entry is retroactive:
+it records what was built and why, and fixes the one place the new code contradicted #032.
+
+Antigravity is the first host whose hook config is **not** Claude-shaped, so the existing
+`merge_hooks` path (which writes a `hooks` map of `{event: [{matcher, hooks}]}`) does not
+apply. It is also the first host that **sends no prompt text** on its prompt-submit event,
+which is why the task label has to come from somewhere else.
+
+**Decision.**
+
+- **Separate installer path.** `~/.gemini/config/hooks.json` uses a top-level `agentstatus`
+  object key (`{enabled: true, PreInvocation: [...], PreToolUse: [...], ...}`) rather than
+  Claude's `hooks` map, so both installers get a dedicated writer
+  (`merge_antigravity_hooks` in `install.rs`, `installAntigravityHooks` in `setup.mjs`)
+  instead of a parameterization of the Claude path. Same guarantees as the other hosts:
+  one-time `.agentstatus-bak` backup, idempotent rewrite, `uninstall` deletes the
+  `agentstatus` key and nothing else. `PreToolUse`/`PostToolUse` use Antigravity's regex
+  matcher `".*"` (Claude's glob `"*"` is not the same dialect).
+- **Declared host, per #032.** Hooks register as `report.sh <Event> antigravity`; the ide
+  comes from arg 2. No payload sniffing, for the same reason as Codex.
+- **Event→state mapping.** `PreInvocation`/`PostInvocation` → `running`, joining the
+  existing `UserPromptSubmit`/`PreToolUse`/`PostToolUse` → `running` set; `Stop` → `idle`.
+  Antigravity has no permission-request or turn-failure event registered, so `blocked` and
+  `error` are currently unreachable for this host — its lights are green/gray only.
+- **Payload differences.** cwd from `workspacePaths[0]` (not `.cwd`); tool name from
+  `toolCall.name`; tool args from `toolCall.args.CommandLine` / `.TargetFile` /
+  `.AbsolutePath`. Its tool names (`run_command`, `write_to_file`, `view_file`, …) are
+  folded into the existing Bash/Edit/Read detail branches.
+- **Task label from the transcript, host-gated.** `PreInvocation` carries no prompt, so the
+  last `USER_INPUT` record is read from
+  `~/.gemini/antigravity/brain/<sid>/.system_generated/logs/transcript_full.jsonl` and, if
+  it is wrapped in `<USER_REQUEST>…</USER_REQUEST>`, unwrapped to the bare request. **This
+  read is gated on `IDE_ARG = antigravity`.** As first shipped it was gated only on the
+  event name — and `UserPromptSubmit` is *Claude's* event, so in every Claude session the
+  fallback chain missed the two `.gemini` paths and landed on the real Claude transcript,
+  spawning `python3` over it on every turn. Measured on a 10 MB transcript: **137 ms/call
+  → 39 ms/call once gated** (~98 ms saved per prompt submit). The work was entirely
+  wasted — the parser scans for Antigravity's `USER_INPUT` records, which Claude
+  transcripts never contain (grep: 0 matches), and jq prefers the payload's `.prompt`
+  anyway. It violated Guideline #3 (hooks must be fast) and #5 (don't read transcript
+  bodies) for zero benefit.
+- **Pruning and focus.** Antigravity is added to `uses_ide_locks` (vscode/cursor) — it is a
+  VS Code fork with the same `~/.claude/ide/*.lock` liveness signal — and keeps the 2h
+  `MAX_IDLE_SECS` backstop. Codex's short `CODEX_IDLE_SECS` + process-liveness rules
+  (#032) do **not** apply, because those exist only to work around Codex's missing
+  close signal. Click-to-focus raises `Antigravity IDE.app` via
+  `/Applications/Antigravity IDE.app/Contents/Resources/app/bin/antigravity-ide`. Like
+  Codex, the Claude extension focus-relay is not used — an Antigravity session is not a
+  Claude session, so focus lands on the window, not the exact tab.
+
+**Alternatives considered.** Generalizing `merge_hooks` to emit both config shapes — rejected;
+the two schemas share no structure, and a flag-driven writer would be harder to read than two
+explicit ones (Karpathy: no over-configurability). Dropping the task label for Antigravity
+rather than reading its transcript — viable and cheaper, but the label is what makes a light
+tell you *which* work is running; gating the read preserves it at no cost to other hosts.
+
+**Validation.** `bash -n` clean. Smoke-tested against a temp status dir: a Claude
+`UserPromptSubmit` carrying a real 10 MB `transcript_path` now takes the payload prompt with
+no `python3` spawn (`ide:"vscode"`, task from `.prompt`), and an Antigravity `PreInvocation`
+with no prompt field still recovers its task from a synthetic `transcript_full.jsonl` and
+unwraps `<USER_REQUEST>` (`ide:"antigravity"`).
+
+**Open — Guideline #4.** The Antigravity event names, payload field names, hook-config schema,
+and transcript path/format above are all **unverified against a running Antigravity install**;
+they were committed without an observed event log. Before relying on this host, capture real
+events from a live session and confirm each. The `_full.jsonl`-then-`.jsonl` transcript
+fallback in particular reads as a guess. The `PostInvocation` → `running` mapping is dead code
+today: no installer registers that event.

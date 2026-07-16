@@ -1,4 +1,4 @@
-# ClaudeStatus
+# AgentStatus
 
 A small, always-on-top **bar of lights** that shows the live status of every open
 Claude Code, Codex, or Cursor session — so you can tell at a glance which of your
@@ -7,7 +7,7 @@ through windows.
 
 Run several agent sessions across projects and windows and it's easy to lose track of
 which one just finished, which is blocked on a permission prompt, and which hit an
-error. ClaudeStatus floats one colored light per session over everything on screen
+error. AgentStatus floats one colored light per session over everything on screen
 (including full-screen apps), updates in real time, and lets you click a light to jump
 straight to that session.
 
@@ -52,19 +52,19 @@ project label, and a timestamp. No prompt or transcript content is read or store
 
 **Requirements:** macOS on Apple Silicon (M1 or later), and Claude Code, Codex, and/or Cursor.
 
-1. Download **`ClaudeStatus_0.3.0_aarch64.dmg`** from the
-   [latest release](https://github.com/Gameslayer999/ClaudeStatus/releases/latest).
-2. Open the DMG and drag **ClaudeStatus** into **Applications**.
+1. Download **`AgentStatus_0.4.0_aarch64.dmg`** from the
+   [latest release](https://github.com/Gameslayer999/AgentStatus/releases/latest).
+2. Open the DMG and drag **AgentStatus** into **Applications**.
 3. The app is **unsigned**, so macOS Gatekeeper blocks it on first launch. Clear the
    download quarantine and open it:
 
    ```bash
-   xattr -dr com.apple.quarantine /Applications/ClaudeStatus.app
-   open /Applications/ClaudeStatus.app
+   xattr -dr com.apple.quarantine /Applications/AgentStatus.app
+   open /Applications/AgentStatus.app
    ```
 
    (Alternatively: double-click it, let macOS block it, then go to **System Settings →
-   Privacy & Security**, scroll to the "ClaudeStatus was blocked" message, and click
+   Privacy & Security**, scroll to the "AgentStatus was blocked" message, and click
    **Open Anyway**. On macOS 15+ the old right-click → Open shortcut no longer bypasses
    this for downloaded apps.)
 
@@ -74,10 +74,10 @@ On first launch the app **installs its own hooks** — it writes
 hooks. **Already-open Claude Code and Codex sessions pick it up immediately — no
 restart needed**, though Codex may ask you to review/trust the new hook with `/hooks`.
 
-ClaudeStatus is an accessory app (**no Dock icon**). To start it at login, add it in
+AgentStatus is an accessory app (**no Dock icon**). To start it at login, add it in
 **System Settings → General → Login Items**.
 
-**Optional — faster click-to-focus:** grant ClaudeStatus **Accessibility** permission
+**Optional — faster click-to-focus:** grant AgentStatus **Accessibility** permission
 (System Settings → Privacy & Security → Accessibility). This lets a light click raise a
 same-Space window in ~0.2s instead of ~1s. Without it, click-to-focus still works via the
 slower IDE CLI.
@@ -101,17 +101,17 @@ the same hover detail and click-to-focus. It reads the same status files, so it 
 app (or the dev hooks) installed for the signal.
 
 ```bash
-code --install-extension extension/claudestatus-0.1.2.vsix
+code --install-extension extension/agentstatus-0.1.2.vsix
 ```
 
 ## Uninstall
 
 ```bash
 node hooks/setup.mjs uninstall     # remove the hooks from settings.json
-rm -rf /Applications/ClaudeStatus.app ~/.claude/status
+rm -rf /Applications/AgentStatus.app ~/.claude/status
 ```
 
-Your original settings are backed up at `~/.claude/settings.json.claudestatus-bak`.
+Your original settings are backed up at `~/.claude/settings.json.agentstatus-bak`.
 
 ## Develop
 
